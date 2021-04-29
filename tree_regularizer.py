@@ -18,11 +18,11 @@ class Tree_Regularizer(_Loss):
         self.strength = strength
 
     # Todo: implement tree regularizer
-    def forward(self, input, target, weights, model):
+    def forward(self, input, target, parameters, model):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         model.to(device)
         model.eval()
-        regularization_term = model(weights)
+        regularization_term = model(parameters)
         return F.mse_loss(input, target) + self.strength * regularization_term
 
 
@@ -91,9 +91,9 @@ class SurrogateModel(nn.Module):
         return x
 
 
-class SumOfSquareLossSurroage(_Loss):
+class SumOfSquareLossSurrogate(_Loss):
     def __init__(self, strength) -> None:
-        super(SumOfSquareLossSurroage, self).__init__()
+        super(SumOfSquareLossSurrogate, self).__init__()
         self.strength = strength
 
     def forward(self, input: Tensor, target: Tensor, model_parameters):

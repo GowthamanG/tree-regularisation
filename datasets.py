@@ -9,7 +9,7 @@ def parabola(x): # parabola
 
 
 def polynom_3(x):
-    return 2.8* x ** 3 - 6.7 * x ** 2 + 4 * x + 0.4
+    return 2* x ** 3 - 4.8 * x ** 2 + 2.9 * x + 0.4
 
 
 def sample_2D_data(num_samples, fun, space):
@@ -21,15 +21,16 @@ def sample_2D_data(num_samples, fun, space):
     max_flip_prob = 0.5
     sharpness = 6
     flip_prob = lambda xx, yy: max_flip_prob * (1 - vertical_dist_from_fun(xx, yy) / max_val) ** 5
-    class_ = lambda x, y: np.sign(polynom_3(x) - y)
+    class_ = lambda x, y: np.sign(y - fun(x))
 
     X = np.random.uniform(low=0, high=space[0], size=(num_samples, 2))
     Y = class_(X[:, 0], X[:, 1])
     do_flip = np.random.binomial(n=1, p=flip_prob(*X.T))
     Y = -(do_flip * 2 - 1) * Y
+    #Y = np.where(Y == -1, 0, Y)
 
-    colormap = {-1: "red", 1: "blue"}
-    colormap = lambda Y: ['r' if i == -1 else 'b' for i in Y]
+    colormap = {0: 'red', 1: 'blue'}
+    colormap = lambda Y: ['b' if i == 1 else 'r' for i in Y]
 
     # fig, ax = plt.subplots()
     # plt.xlim([0, 1.5])

@@ -1,12 +1,13 @@
 import numpy as np
 from torch import nn
 from sklearn.tree import DecisionTreeClassifier
+import matplotlib.pyplot as plt
 
 def average_path_length(X_train, X_test, y_test, model: nn.Module):
     #y_tree = model.predict(X).detach().numpy()
     #y_tree = sequence_to_samples(y_tree)
     model.eval()
-    y = model(X_train)
+    y_hat = model(X_train)
     # y_tree = np.argmax(y_tree, axis=1)
     #
     # X_tree = X.detach().numpy()
@@ -15,12 +16,12 @@ def average_path_length(X_train, X_test, y_test, model: nn.Module):
     """What is the correct way to create a pruned tree?
     If min_samples_leaf would be a float, this would reflect also the total numbers of samples.
     Otherwise, the trees could get more complex with bigger datasets."""
-    tree = DecisionTreeClassifier(min_samples_leaf=25, ccp_alpha=0.001)
+    tree = DecisionTreeClassifier(min_samples_leaf=25)
     X_train = X_train.to('cpu').detach().numpy()
-    y = y.to('cpu').detach().numpy()
-    y = [1 if y[i] > 0.5 else 0 for i in range(len(y))]
-    tree.fit(X_train, y)
-    tree = post_pruning(X_train, y, X_test, y_test, tree)
+    y_hat = y_hat.to('cpu').detach().numpy()
+    y_hat_decoded = [1 if y_hat[i] > 0.5 else 0 for i in range(len(y_hat))]
+    tree.fit(X_train, y_hat_decoded)
+    tree = post_pruning(X_train, y_hat_decoded, X_test, y_test, tree)
     return average_tree_length(X_train, tree)
 
 
@@ -29,7 +30,7 @@ def sequence_to_samples(tensor):
     return np.vstack(sequence_array)
 
 
-def post_pruning(X_train, y_train,  X_test, y_test, tree):
+def post_pruning(X_train, y_train, X_test, y_test, tree):
     # https://medium.com/swlh/post-pruning-decision-trees-using-python-b5d4bcda8e23
     # https://scikit-learn.org/stable/auto_examples/tree/plot_cost_complexity_pruning.html#sphx-glr-auto-examples-tree-plot-cost-complexity-pruning-py
 
@@ -42,9 +43,14 @@ def post_pruning(X_train, y_train,  X_test, y_test, tree):
         clf.fit(X_train, y_train)
         clfs.append(clf)
 
+    # remove last tree since it is a trivial one with only one node
+    clfs = clfs[:-1]
+    ccp_alphas = ccp_alphas[:-1]
+
     train_scores = [clf.score(X_train, y_train) for clf in clfs]
     test_scores = [clf.score(X_test, y_test) for clf in clfs]
 
+    # Select the alpha with max test accuracy
     index_best_model = np.argmax(test_scores)
     best_model = clfs[index_best_model]
 
