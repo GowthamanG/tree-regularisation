@@ -4,25 +4,23 @@ from sklearn.tree import DecisionTreeClassifier
 import matplotlib.pyplot as plt
 
 def average_path_length(X_train, X_test, y_test, model: nn.Module):
-    #y_tree = model.predict(X).detach().numpy()
-    #y_tree = sequence_to_samples(y_tree)
     model.eval()
-    y_hat = model(X_train)
-    # y_tree = np.argmax(y_tree, axis=1)
-    #
-    # X_tree = X.detach().numpy()
-    # X_tree = sequence_to_samples(X_tree)
+    y_tree = model(X_train).to('cpu').detach().numpy()
+    #y_tree = sequence_to_samples(y_tree)
+    y_tree = np.argmax(y_tree, axis=1)
+
+    X_tree = X_train.to('cpu').detach().numpy()
+    #X_tree = sequence_to_samples(X_tree)
 
     """What is the correct way to create a pruned tree?
     If min_samples_leaf would be a float, this would reflect also the total numbers of samples.
     Otherwise, the trees could get more complex with bigger datasets."""
-    tree = DecisionTreeClassifier(min_samples_leaf=25)
-    X_train = X_train.to('cpu').detach().numpy()
-    y_hat = y_hat.to('cpu').detach().numpy()
-    y_hat_decoded = [1 if y_hat[i] > 0.5 else 0 for i in range(len(y_hat))]
-    tree.fit(X_train, y_hat_decoded)
-    tree = post_pruning(X_train, y_hat_decoded, X_test, y_test, tree)
-    return average_tree_length(X_train, tree)
+    tree = DecisionTreeClassifier(min_samples_leaf=25, ccp_alpha=0.015)
+
+    y_tree = np.where(y_tree > 0.5, 1, -1)
+    tree.fit(X_tree, y_tree)
+    #tree = post_pruning(X_train, y_hat_decoded, X_test, y_test, tree)
+    return average_tree_length(X_tree, tree)
 
 
 def sequence_to_samples(tensor):
