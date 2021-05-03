@@ -1,13 +1,15 @@
 import numpy as np
 from torch import nn
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
+
 
 def average_path_length(X_train, X_test, y_test, model: nn.Module):
     model.eval()
     y_tree = model(X_train).to('cpu').detach().numpy()
     #y_tree = sequence_to_samples(y_tree)
-    y_tree = np.argmax(y_tree, axis=1)
+    #y_tree = np.argmax(y_tree, axis=1)
 
     X_tree = X_train.to('cpu').detach().numpy()
     #X_tree = sequence_to_samples(X_tree)
@@ -15,11 +17,11 @@ def average_path_length(X_train, X_test, y_test, model: nn.Module):
     """What is the correct way to create a pruned tree?
     If min_samples_leaf would be a float, this would reflect also the total numbers of samples.
     Otherwise, the trees could get more complex with bigger datasets."""
-    tree = DecisionTreeClassifier(min_samples_leaf=25, ccp_alpha=0.015)
+    tree = DecisionTreeClassifier(random_state=42, min_samples_leaf=25)
 
     y_tree = np.where(y_tree > 0.5, 1, -1)
     tree.fit(X_tree, y_tree)
-    #tree = post_pruning(X_train, y_hat_decoded, X_test, y_test, tree)
+    #tree = post_pruning(X_tree, y_tree, X_test.to('cpu').detach().numpy(), y_test.to('cpu').detach().numpy(), tree)
     return average_tree_length(X_tree, tree)
 
 
@@ -37,7 +39,7 @@ def post_pruning(X_train, y_train, X_test, y_test, tree):
 
     clfs = []
     for ccp_alpha in ccp_alphas:
-        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+        clf = DecisionTreeClassifier(random_state=42, ccp_alpha=ccp_alpha)
         clf.fit(X_train, y_train)
         clfs.append(clf)
 
@@ -45,8 +47,10 @@ def post_pruning(X_train, y_train, X_test, y_test, tree):
     clfs = clfs[:-1]
     ccp_alphas = ccp_alphas[:-1]
 
-    train_scores = [clf.score(X_train, y_train) for clf in clfs]
-    test_scores = [clf.score(X_test, y_test) for clf in clfs]
+    #train_scores = [clf.score(X_train, y_train) for clf in clfs]
+    #test_scores = [clf.score(X_test, y_test) for clf in clfs]
+
+    test_scores = [accuracy_score(y_test, clf.predict(X_test)) for clf in clfs]
 
     # Select the alpha with max test accuracy
     index_best_model = np.argmax(test_scores)

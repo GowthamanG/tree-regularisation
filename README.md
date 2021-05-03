@@ -11,7 +11,7 @@ M. Wu, S. Parbhoo, M. C. Hughes, V. Roth, and F. Doshi-Velez, “Optimizing for 
 Tree Regularization,”arXiv e-prints, p. arXiv:1908.05254, Aug. 2019.
 
 <a id="1">[3]</a>
-M. Wu, S. Parbhoo, M. Hughes, R. Kindle, L. Celi, M. Zazzi, V. Roth, and F. Doshi-Velez, “RegionalTree Regularization for 
+M. Wu, S. Parbhoo, M. Hughes, R. Kindle, L. Celi, M. Zazzi, V. Roth, and F. Doshi-Velez, “Regional Tree Regularization for 
 Interpretability in Black Box Models,”arXiv e-prints, p. arXiv:1908.04494, Aug.2019.
 
 

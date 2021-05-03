@@ -8,11 +8,11 @@ import torchvision
 from torch import nn
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
-from datasets import sample_2D_data, polynom_3
+from datasets import sample_2D_data, polynom_3, polynom_6
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from models import MLP
+import models
 import tree_regularizer as tr
 import decision_tree_utils as dtu
 from torch.utils.data import DataLoader, TensorDataset
@@ -40,21 +40,58 @@ def test():
     pass
 
 
+def decision_tree_export_graph(tree, feature_names, classes, filename):
+    dot_data = StringIO()
+    export_graphviz(tree, out_file=dot_data, filled=True, rounded=True, special_characters=True,
+                    feature_names=feature_names,
+                    class_names=classes)
+    graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
+    graph.write_png(filename)
+    Image(graph.create_png())
+    img = ImagePIL.open('figures/decision_tree_reg.png')
+    fig = plt.figure()
+    plt.imshow(img)
+    plt.close()
+
+    return fig
+
+
+
 def params_to_1D_vector(model_parameters):
     parameters = []
     for param in model_parameters:
         parameters.append(torch.flatten(param.data))
 
-    return torch.cat(parameters)
+    return torch.cat(parameters, dim=0)
 
+
+def save_data(X, Y, filename):
+    file = open(filename, 'w')
+    np.savetxt(file, np.hstack((X, Y.reshape(-1, 1))))
+
+    file.close()
+
+def colormap(Y):
+    return ['b' if y == 1 else 'r' for y in Y]
 
 def main():
 
     num_samples, dim, space = 500, 2, [1.5, 1.5]
-    colormap = lambda Y: ['b' if y == 1 else 'r' for y in Y]
     writer = SummaryWriter()
 
-    X, Y = sample_2D_data(num_samples, polynom_3, space)
+    filename = 'data.txt'
+
+    if args.s:
+        #X, Y = sample_2D_data(num_samples, polynom_3, space)
+        #save_data(X, Y, filename)
+
+        X, Y = sample_2D_data(num_samples, polynom_6, space)
+        save_data(X, Y, filename)
+
+    data_from_txt = np.loadtxt(filename)
+    X = data_from_txt[:, :2]
+    Y = data_from_txt[:, 2]
+
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.33, random_state=42)
 
     fig = plt.figure()
@@ -69,18 +106,18 @@ def main():
     plt.plot(x_decision_fun, y_decision_fun, 'k-')
     #plt.savefig('figures/samples_training_plot.png')
 
-    plt.show()
+    #plt.show()
     writer.add_figure('Training samples', figure=fig)
     data_summary = f'Samples: {num_samples}  \nTraining data shape: {X_train.shape}  \nTest data shape: {X_test.shape}'
     writer.add_text('Training Data Summary', data_summary)
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    model = MLP(d_in=dim, hidden_size=500)
+    model = models.Net1(d_in=dim)
     model.to(device)
 
-
     # Hypterparameters
+    num_epochs = args.ep
     batch_size = args.batch
     input_batch_size_surrogate_training = args.sb
     regularization_strength = args.rs
@@ -106,7 +143,7 @@ def main():
 
     print('================Training===================')
 
-    num_epochs = 500
+    #num_epochs = 250
     input_data_surrogate_training = []
     APLs = []
     training_loss = []
@@ -119,13 +156,15 @@ def main():
         if input_batch_size_surrogate_training > 0:
             for i, batch in enumerate(data_train_loader):
                 x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+
                 optimizer.zero_grad()
                 y_hat = model(x_batch)
 
                 model_parameters = params_to_1D_vector(model.parameters())
 
                 if surrogate_model_trained:
-                    loss = criterion_tr(input=y_batch, target=y_hat, parameters=model_parameters, model=surrogate_model)
+                    loss = criterion_tr(input=y_batch, target=y_hat, parameters=model_parameters, surrogate_model=surrogate_model)
+                    #loss = criterion(input=y_batch, target=y_hat)
                 else:
                     loss = criterion(input=y_batch, target=y_hat)
 
@@ -149,22 +188,20 @@ def main():
         else:
             print('================Training surrogate model===================')
             input_data_surrogate_training = torch.vstack(input_data_surrogate_training)
+            #input_data_surrogate_training = torch.zeros(size=input_data_surrogate_training.size())
+
+            fig = plt.figure()
+            plt.hist(APLs)
+            plt.title(f'Histogram of APLs after epoch {epoch + 1}')
+            plt.xlabel('APLs')
+            writer.add_figure(f'APL Histogram/APLs Histogram after epoch: {epoch+1}', fig)
+            plt.close(fig)
+
             APLs = torch.tensor([APLs], dtype=torch.float32).T
 
-            # todo --> clean code
-            if args.sw:
-                if surrogate_model_trained:
-                    surrogate_model, sr_loss = tr.train_surrogate_model(input_data_surrogate_training, APLs,
-                                                                        args.epsilon, learning_rate=args.lr_sr,
-                                                                        current_surrogate_model=surrogate_model)
-                else:
-                    surrogate_model, sr_loss = tr.train_surrogate_model(input_data_surrogate_training, APLs,
-                                                                        args.epsilon, learning_rate=args.lr_sr)
-                    surrogate_model_trained = True
-            else:
-                surrogate_model, sr_loss = tr.train_surrogate_model(input_data_surrogate_training, APLs,
-                                                                    args.epsilon, learning_rate=args.lr_sr, retrain=True)
-                surrogate_model_trained = True
+            surrogate_model, sr_loss = tr.train_surrogate_model(input_data_surrogate_training, APLs,
+                                                                args.epsilon, learning_rate=args.lr_sr, retrain=True)
+            surrogate_model_trained = True
 
             loss_surrogate_training.append(sr_loss)
 
@@ -175,7 +212,8 @@ def main():
 
                 model_parameters = params_to_1D_vector(model.parameters())
 
-                loss = criterion_tr(input=y_batch, target=y_hat, parameters=model_parameters, model=surrogate_model)
+                loss = criterion_tr(input=y_batch, target=y_hat, parameters=model_parameters,
+                                    surrogate_model=surrogate_model)
                 loss.backward()
                 optimizer.step()
 
@@ -189,23 +227,8 @@ def main():
             training_loss.append(np.array(running_loss).mean())
             input_batch_size_surrogate_training = args.sb
 
-    # fig = plt.figure()
-    # plt.plot(np.linspace(0, num_epochs, len(training_loss)), training_loss)
-    # plt.title('Training Loss')
-    # #plt.savefig('figures/training_loss.png')
-    # writer.add_figure('Training Loss', figure=fig)
-
     for i in range(num_epochs):
         writer.add_scalar('Training Loss', training_loss[i], i)
-
-    # num_plots = len(loss_surrogate_training)
-    # fig, ax = plt.subplots(num_plots, figsize=(8, 20))
-    # for i in range(len(loss_surrogate_training)):
-    #     ax[i].plot(np.linspace(0, 250, len(loss_surrogate_training[i])), loss_surrogate_training[i])
-    #     ax[i].set_title(f'{i} Surrogate Training Loss')
-    # fig.tight_layout()
-    # #plt.savefig('figures/surrogate_training_loss.png')
-    # writer.add_figure('Surrogate Training Loss', figure=fig)
 
     for i in range(len(loss_surrogate_training)):
         for j in range(len(loss_surrogate_training[i])):
@@ -227,7 +250,7 @@ def main():
 
             model_parameters = params_to_1D_vector(model.parameters())
 
-            loss = criterion_tr(input=y_hat, target=y, parameters=model_parameters, model=surrogate_model)
+            loss = criterion_tr(input=y_hat, target=y, parameters=model_parameters, surrogate_model=surrogate_model)
 
             loss_with_train_data.append(loss.item())
 
@@ -241,16 +264,14 @@ def main():
 
             model_parameters = params_to_1D_vector(model.parameters())
 
-            loss = criterion_tr(input=y_hat, target=y, parameters=model_parameters, model=surrogate_model)
+            loss = criterion_tr(input=y_hat, target=y, parameters=model_parameters, surrogate_model=surrogate_model)
 
             loss_with_test_data.append(loss.item())
 
         y_test_predicted = torch.cat(y_test_predicted)
 
-        # label_colors_true = ['r' if data_train_loader.dataset[i][1] == 1 else 'b' for i in
-        #                      range(len(data_train_loader.dataset[:][1]))]
-        colormap_train_predicted = ['b' if y_train_predicted[i] > 0.5 else 'r' for i in range(len(y_train_predicted))]
-        colormap_test_predicted = ['b' if y_test_predicted[i] > 0.5 else 'r' for i in range(len(y_test_predicted))]
+        colormap_train_predicted = ['b' if y > 0.5 else 'r' for y in y_train_predicted]
+        colormap_test_predicted = ['b' if y > 0.5 else 'r' for y in y_test_predicted]
 
         X_train = X_train.to('cpu').detach().numpy()
         y_train = y_train.to('cpu').detach().numpy()
@@ -267,13 +288,10 @@ def main():
         ax2.set_ylim([0, space[1]])
         ax2.set_title('Training data prediction')
 
-        x_decision_fun = np.linspace(0, space[0], 100)
-        y_decision_fun = polynom_3(x_decision_fun)
-
         ax1.plot(x_decision_fun, y_decision_fun, 'k-')
         ax2.plot(x_decision_fun, y_decision_fun, 'k-')
 
-        #plt.savefig('figures/training_samples_prediction_plot.png')
+        fig.tight_layout()
 
         writer.add_figure(f'Inference/Inference with training data, loss: {np.array(loss_with_train_data).mean()}', figure=fig)
 
@@ -287,45 +305,41 @@ def main():
         ax2.set_ylim([0, space[1]])
         ax2.set_title('Test data prediction')
 
-        x_decision_fun = np.linspace(0, space[0], 100)
-        y_decision_fun = polynom_3(x_decision_fun)
-
         ax1.plot(x_decision_fun, y_decision_fun, 'k-')
         ax2.plot(x_decision_fun, y_decision_fun, 'k-')
 
-
-        # plt.savefig('figures/training_samples_prediction_plot.png')
+        fig.tight_layout()
 
         writer.add_figure(f'Inference/Inference with test data, loss: {np.array(loss_with_test_data).mean()}', figure=fig)
 
     y_pred = [1 if y > 0.5 else -1 for y in y_train_predicted]
     tn, fp, fn, tp = confusion_matrix(y_train, y_pred).ravel()
-    acc = accuracy_score(y_train, y_pred)
-    data_summary = f'NN with train data  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
+    acc_NN_train = accuracy_score(y_train, y_pred)
+    data_summary = f'NN with train data  \n  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
     writer.add_text('Confusion Matrices/NN with Train data', data_summary)
-    writer.add_text('Accuracy/Accuracy of NN with Train data', f'Accuracy of NN with train data: {acc:.4f}')
+    writer.add_text('Accuracy/Accuracy of NN with Train data', f'Accuracy of NN with train data: {acc_NN_train:.4f}')
 
     y_pred = [1 if y > 0.5 else -1 for y in y_test_predicted]
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-    acc = accuracy_score(y_test, y_pred)
-    data_summary = f'NN with test data  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
+    acc_NN_test = accuracy_score(y_test, y_pred)
+    data_summary = f'NN with test data  \n  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
     writer.add_text('Confusion Matrices/NN with Test data', data_summary)
-    writer.add_text('Accuracy/Accuracy of NN with Test data', f'Accuracy of NN with test data: {acc:.4f}')
+    writer.add_text('Accuracy/Accuracy of NN with Test data', f'Accuracy of NN with test data: {acc_NN_test:.4f}')
 
     # Decision tree directly on input space
-    final_decision_tree = DecisionTreeClassifier(min_samples_leaf=25)
+    final_decision_tree = DecisionTreeClassifier(random_state=42, min_samples_leaf=25)
     final_decision_tree.fit(X_train, y_train)
-    final_decision_tree = dtu.post_pruning(X_train, y_train, X_test, y_test, final_decision_tree)
+    #final_decision_tree = dtu.post_pruning(X_train, y_train, X_test, y_test, final_decision_tree)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)
-    acc = accuracy_score(y_test, y_hat_with_tree)
+    acc_DT = accuracy_score(y_test, y_hat_with_tree)
 
     tn, fp, fn, tp = confusion_matrix(y_test, y_hat_with_tree).ravel()
-    data_summary = f'DT before reg with test data  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
+    data_summary = f'DT before reg with test data  \n  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
     writer.add_text('Confusion Matrices/DT with Test data', data_summary)
-    writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT before reg: {acc:.4f}')
+    writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT before reg: {acc_DT:.4f}')
 
-    # Export graph
+    #Export graph
     dot_data = StringIO()
     export_graphviz(final_decision_tree, out_file=dot_data, filled=True, rounded=True, special_characters=True,
                     feature_names=['x', 'y'],
@@ -336,21 +350,21 @@ def main():
     img = ImagePIL.open('figures/decision_tree.png')
     fig = plt.figure()
     plt.imshow(img)
-    writer.add_figure(f'Decision Trees/DT before regularisation, Accuracy: {acc:.4f}', fig)
+    writer.add_figure(f'Decision Trees/DT before regularisation, Accuracy: {acc_DT:.4f}', fig)
 
     # Decision tree after regularization
-    final_decision_tree = DecisionTreeClassifier(min_samples_split=25)
+    final_decision_tree = DecisionTreeClassifier(random_state=42, min_samples_split=25)
     y_train_predicted = [1 if y > 0.5 else -1 for y in y_train_predicted]
     final_decision_tree.fit(X_train, y_train_predicted)
-    final_decision_tree = dtu.post_pruning(X_train, y_train_predicted, X_test, y_test, final_decision_tree)
+    #final_decision_tree = dtu.post_pruning(X_train, y_train_predicted, X_test, y_test, final_decision_tree)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)
 
     tn, fp, fn, tp = confusion_matrix(y_test, y_hat_with_tree).ravel()
-    acc = accuracy_score(y_test, y_hat_with_tree)
-    data_summary = f'DT after reg with test data  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
+    acc_DT_reg = accuracy_score(y_test, y_hat_with_tree)
+    data_summary = f'DT after reg with test data  \n  \nTP: {tp}  \nFP: {fp}  \nFN: {fn}  \nTN: {tn}'
     writer.add_text('Confusion Matrices/DT reg with Test data', data_summary)
-    writer.add_text('Accuracy/Accuracy of DT reg', f'Accuracy with DT after reg: {acc:.4f}')
+    writer.add_text('Accuracy/Accuracy of DT reg', f'Accuracy with DT after reg: {acc_DT_reg:.4f}')
 
     # Export graph
     dot_data = StringIO()
@@ -363,46 +377,54 @@ def main():
     img = ImagePIL.open('figures/decision_tree_reg.png')
     fig = plt.figure()
     plt.imshow(img)
-    writer.add_figure(f'Decision Trees/DT after regularisation, Accuracy: {acc:.4f}', fig)
+    writer.add_figure(f'Decision Trees/DT after regularisation, Accuracy: {acc_DT_reg:.4f}', fig)
 
-    #breakpoint()
-
-    #print("Differences: ", np.sum(np.abs(np.array(y_train) - np.array(y_train_predicted))))
+    print(f'Accuracy of NN with training data: {acc_NN_train:.4f}')
+    print(f'Accuracy of NN with test data: {acc_NN_test:.4f}')
+    print(f'Accuracy of NN DT before regularisation with test data: {acc_DT:.4f}')
+    print(f'Accuracy of NN DT after regularisation with test data: {acc_DT_reg:.4f}')
 
     writer.close()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+
+    parser.add_argument('--ep',
+                        type=int,
+                        required=False,
+                        default=250,
+                        help='Number of epochs')
+
     parser.add_argument('--batch',
                         type=int,
-                        default=64,
+                        default=100,
                         required=False,
-                        help='Batch size, default 64')
+                        help='Batch size, default 100')
 
     parser.add_argument('--rs',
                         type=float,
                         required=False,
-                        default=0.5,
-                        help='Regularization strength for the objective, default 10')
+                        default=10e-4,
+                        help='Regularization strength for the objective, default 10e-4')
 
     parser.add_argument('--epsilon',
                         type=float,
                         default=0.2,
                         required=False,
-                        help='Regularization strength for the surrogate training, default 10')
+                        help='Deprecated: Regularization strength for the surrogate training, default 20e-2')
 
     parser.add_argument('--lr',
                         type=float,
                         required=False,
-                        default=0.001,
-                        help='Learning rate, default 0.001')
+                        default=10e-4,
+                        help='Learning rate, default 10e-4')
 
     parser.add_argument('--lr_sr',
                         type=float,
                         required=False,
-                        default=0.001,
-                        help='Learning rate, default 0.001')
+                        default=10e-3,
+                        help='Learning rate, default 10e-3')
 
     parser.add_argument('--rt',
                         type=bool,
@@ -421,6 +443,12 @@ if __name__ == '__main__':
                         required=False,
                         default=25,
                         help='Input size for surrogate training, default 25')
+
+    parser.add_argument('--s',
+                        type=bool,
+                        required=False,
+                        default=False,
+                        help='Sample new data')
 
     args = parser.parse_args()
 

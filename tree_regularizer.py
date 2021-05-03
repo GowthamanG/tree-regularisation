@@ -13,21 +13,22 @@ from typing import Callable, Optional
 
 class Tree_Regularizer(_Loss):
 
-    def __init__(self, strength) -> None:
-        super(Tree_Regularizer, self).__init__()
+    def __init__(self, strength, size_average=None, reduce=None, reduction: str = 'mean') -> None:
+        super(Tree_Regularizer, self).__init__(size_average, reduce, reduction)
         self.strength = strength
 
-    # Todo: implement tree regularizer
-    def forward(self, input, target, parameters, model):
+    def forward(self, input, target, parameters, surrogate_model):
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        model.to(device)
-        model.eval()
-        regularization_term = model(parameters)
-        return F.mse_loss(input, target) + self.strength * regularization_term
+        surrogate_model.to(device)
+        surrogate_model.eval()
+        regularization_term = surrogate_model(parameters)
+        return F.mse_loss(input=input, target=target) + self.strength * regularization_term
 
 
-def train_surrogate_model(weights, APLs, strength, learning_rate=0.001, retrain=False, current_surrogate_model=None):
+def train_surrogate_model(weights, APLs, strength, learning_rate=10e-3, retrain=False, current_surrogate_model=None):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    #APLs = APLs - torch.mean(APLs)
 
     if retrain:
         model = SurrogateModel(weights.size()[1])
@@ -36,6 +37,7 @@ def train_surrogate_model(weights, APLs, strength, learning_rate=0.001, retrain=
             model = current_surrogate_model
         else:
             model = SurrogateModel(weights.size()[1])
+
     model.to(device)
     criterion = nn.MSELoss()
     optimizer = Adam(model.parameters(), lr=learning_rate)
@@ -55,25 +57,18 @@ def train_surrogate_model(weights, APLs, strength, learning_rate=0.001, retrain=
         for i, batch in enumerate(train_loader):
             x_batch, y_batch = batch[0].to(device), batch[1].to(device)
 
-            # zero the parameter gradients
             optimizer.zero_grad()
-
-            # forward + backward + optimize
             y_hat = model(x_batch)
-
-            parameters = []
-            for param in model.parameters():
-                parameters.append(torch.flatten(param.data))
-            weights = torch.cat(parameters)
-
             loss = criterion(input=y_batch, target=y_hat)
             loss.backward()
             optimizer.step()
 
-            running_loss.append(loss.item())
+            running_loss.append(loss.item()/(np.var(APLs.detach().cpu().numpy())+0.01))
         print(f'Surrogate training, epoch: {epoch + 1}/{num_epochs}, loss: {np.array(running_loss).mean():.4f}')
         training_loss.append(np.array(running_loss).mean())
 
+    #print('Dim input:', weights.shape)
+    #print(weights)
     return model, training_loss
 
 
@@ -90,7 +85,7 @@ class SurrogateModel(nn.Module):
         x = self.fc2(x)
         return x
 
-
+# todo: Perhaps not used anymore --> delete
 class SumOfSquareLossSurrogate(_Loss):
     def __init__(self, strength) -> None:
         super(SumOfSquareLossSurrogate, self).__init__()
@@ -99,6 +94,5 @@ class SumOfSquareLossSurrogate(_Loss):
     def forward(self, input: Tensor, target: Tensor, model_parameters):
         # todo: implement correctly
         loss = torch.sum(torch.pow(target - input, 2)) + self.strength * torch.pow(torch.linalg.norm(model_parameters, 2), 2)
-        #loss = nn
         return loss
 
