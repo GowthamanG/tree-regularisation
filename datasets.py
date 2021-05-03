@@ -10,6 +10,11 @@ def parabola(x): # parabola
 
 def polynom_3(x):
     return 2* x ** 3 - 4.8 * x ** 2 + 2.9 * x + 0.4
+    #return x ** 3 - 3.6 * x ** 2 + 3.3 * x + 0.8
+
+
+def polynom_6(x):
+     return -2.19 * x ** 6 + 17.74 * x ** 5 - 54.24 * x ** 4 + 77.10 * x ** 3 - 49.66 * x ** 2 + 11.23 * x + 0.8
 
 
 def sample_2D_data(num_samples, fun, space):
@@ -29,7 +34,7 @@ def sample_2D_data(num_samples, fun, space):
     Y = -(do_flip * 2 - 1) * Y
     #Y = np.where(Y == -1, 0, Y)
 
-    colormap = {0: 'red', 1: 'blue'}
+    colormap = {-1: 'red', 1: 'blue'}
     colormap = lambda Y: ['b' if i == 1 else 'r' for i in Y]
 
     # fig, ax = plt.subplots()
