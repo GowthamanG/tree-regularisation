@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 
 def parabola(x): # parabola
-    return 5 * (x - 0.75) ** 2 + 0.4
+    return 5 * (x - 0.5) ** 2 + 0.4
 
 
 def polynom_3(x):
@@ -32,23 +32,7 @@ def sample_2D_data(num_samples, fun, space):
     Y = class_(X[:, 0], X[:, 1])
     do_flip = np.random.binomial(n=1, p=flip_prob(*X.T))
     Y = -(do_flip * 2 - 1) * Y
-    #Y = np.where(Y == -1, 0, Y)
-
-    colormap = {-1: 'red', 1: 'blue'}
-    colormap = lambda Y: ['b' if i == 1 else 'r' for i in Y]
-
-    # fig, ax = plt.subplots()
-    # plt.xlim([0, 1.5])
-    # plt.ylim([0, 1.5])
-    # plt.scatter(samples[:,0], samples[:,1], c=colormap(Y))
-    # ax.set_title('Training data')
-    #
-    # xx = np.linspace(0, 1.5, 50)
-    # yy = polynom_3(xx)
-    #
-    # ax.plot(xx, yy, 'k-')
-    #
-    # plt.show()
+    Y = np.where(Y == -1, 0, Y)
 
     return X, Y
 

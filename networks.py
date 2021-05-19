@@ -19,11 +19,33 @@ class Net1(nn.Module):
         x = self.output(x)
         return x
 
-
-class Net2(nn.Module):
+class Net2(nn.Module): # from paper
 
     def __init__(self, d_in):
         super(Net2, self).__init__()
+        self.fc1 = nn.Linear(d_in, 100)
+        self.fc2 = nn.Linear(100, 100)
+        self.fc3 = nn.Linear(100, 10)
+        self.output = nn.Linear(10, 1)
+
+        self.ReLu = nn.ReLU()
+
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.ReLu(x)
+        x = self.fc2(x)
+        x = self.ReLu(x)
+        x = self.fc3(x)
+        x = self.ReLu(x)
+        x = self.output(x)
+        return x
+
+
+class Net3(nn.Module):
+
+    def __init__(self, d_in):
+        super(Net3, self).__init__()
         self.fc1 = nn.Linear(d_in, 500)
         self.fc2 = nn.Linear(500, 1000)
         self.fc3 = nn.Linear(1000, 800)
