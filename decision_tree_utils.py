@@ -2,8 +2,10 @@ import numpy as np
 from torch import nn
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
 
+'''
+Deprecated
+'''
 def sequence_to_samples(tensor):
     sequence_array = [tensor[idx, :, :] for idx in range(tensor.shape[0])]
     return np.vstack(sequence_array)
@@ -18,7 +20,7 @@ def average_tree_length(X, tree):
     path_length = np.mean(np.sum(tree.tree_.decision_path(X), axis=1))
     return path_length
 
-def average_path_length(X_train, X_test, y_test, model: nn.Module):
+def average_path_length(X_train, X_test, y_test, model: nn.Module, ccp_alpha):
     model.eval()
     y_tree = model(X_train).cpu().detach().numpy()
     #y_tree = sequence_to_samples(y_tree)
@@ -30,11 +32,11 @@ def average_path_length(X_train, X_test, y_test, model: nn.Module):
     """What is the correct way to create a pruned tree?
     If min_samples_leaf would be a float, this would reflect also the total numbers of samples.
     Otherwise, the trees could get more complex with bigger datasets."""
-    tree = DecisionTreeClassifier()
 
+    tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
     y_tree = np.where(y_tree > 0.5, 1, 0)
     tree.fit(X_tree, y_tree)
-    #tree = post_pruning(X_tree, y_tree, X_test.to('cpu').detach().numpy(), y_test.to('cpu').detach().numpy(), tree)
+
     return average_tree_length(X_tree, tree)
 
 
@@ -63,9 +65,6 @@ def post_pruning(X_train, y_train, X_test, y_test, tree):
     test_scores = [accuracy_score(y_test, clf.predict(X_test)) for clf in clfs]
 
     # Select the alpha with max test accuracy
-    if len(test_scores) == 0:
-        return tree
-    else:
-        index_best_model = np.argmax(test_scores)
-        best_model = clfs[index_best_model]
-        return best_model
+    index_best_model = np.argmax(test_scores)
+
+    return clfs[index_best_model], ccp_alphas[index_best_model]
