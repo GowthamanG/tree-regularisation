@@ -309,8 +309,7 @@ def init(path, strength, regulariser):
 
     # Decision tree directly on input space
 
-    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_test, y_test, space, colormap(y_train),
-                                                          f"{path}/decision_tree")
+    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_test, y_test, space, f"{path}/decision_tree")
     acc_DT = accuracy_score(y_test, y_hat_tree)
     tn, fp, fn, tp = confusion_matrix(y_test, y_hat_tree).ravel()
     data_summary = f'DT before reg with test data  \n  \nTN: {tn}  \nFP: {fp}  \nFN: {fn}  \nTP: {tp}'
@@ -453,7 +452,7 @@ def init(path, strength, regulariser):
 
     # Decision tree after regularization
 
-    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train_predicted, X_test, y_test, space, colormap(y_train_predicted), f"{path}/decision_tree_reg", ccp_alpha=ccp_alpha)
+    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train_predicted, X_test, y_test, space, f"{path}/decision_tree_reg", ccp_alpha=ccp_alpha)
     acc_DT_reg = accuracy_score(y_test, y_hat_tree)
     tn, fp, fn, tp = confusion_matrix(y_test, y_hat_tree).ravel()
     data_summary = f'DT before reg with test data  \n  \nTN: {tn}  \nFP: {fp}  \nFN: {fn}  \nTP: {tp}'
