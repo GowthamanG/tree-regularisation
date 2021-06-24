@@ -50,7 +50,8 @@ def save_data(X, Y, filename: str):
 def colormap(Y):
     return ['b' if y == 1 else 'r' for y in Y]
 
-def build_decision_tree(X_train, y_train, X_test, y_test, space, colormap_scatter_plot, path, ccp_alpha=None):
+
+def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha=None):
 
     if ccp_alpha:
         final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
@@ -83,7 +84,7 @@ def build_decision_tree(X_train, y_train, X_test, y_test, space, colormap_scatte
     Z = Z.reshape(xx.shape)
     fig_contour = plt.figure()
     plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-    plt.scatter(*X_train.T, c=colormap_scatter_plot, edgecolors='k')
+    plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
     plt.savefig(f'{path}_contourplot.png')
 
     return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha
