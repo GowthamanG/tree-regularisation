@@ -78,10 +78,10 @@ def parser():
                         default=1,
                         help='Input size for surrogate training, default 25')
 
-    parser.add_argument('--s',
+    parser.add_argument('--save',
                         type=bool,
                         required=False,
-                        default=True,
+                        default=False,
                         help='Sample new data, default False')
 
     return parser
@@ -292,10 +292,10 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
 
 def init(path, strength, regulariser):
 
-    num_samples, dim, space = 2000, 2, [[0, 1], [0, 1]]
+    num_samples, dim, space = 2000, 2, [[0, 1.5], [0, 1.5]]
     writer = SummaryWriter()
 
-    fun = parabola
+    fun = parabola # either use paraobla, polynom_3, polynom_3 or create a new one
     if args.s:
         X, Y = sample_2D_data(num_samples, fun, space)
         save_data(X, Y, 'dataset/data_parabola')

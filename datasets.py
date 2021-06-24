@@ -2,7 +2,7 @@ import numpy as np
 
 
 def parabola(x): # parabola
-    return 5 * (x - 0.5) ** 2 + 0.2
+    return 5 * (x - 0.75) ** 2 + 0.2
 
 
 def polynom_3(x):
@@ -14,7 +14,7 @@ def polynom_3(x):
 def polynom_6(x):
     #space => [-3,3] x [-3,3]
      #return -2.19 * x ** 6 + 17.74 * x ** 5 - 54.24 * x ** 4 + 77.10 * x ** 3 - 49.66 * x ** 2 + 11.23 * x + 0.8
-     return -0.21 * x ** 6 + 0.01 * x ** 5 + 1.96 * x ** 4 - 0.17 * x ** 3 - 4.54 * x ** 2 + 0.63 * x + 2.15
+    return -0.21 * x ** 6 + 0.01 * x ** 5 + 1.96 * x ** 4 - 0.17 * x ** 3 - 4.54 * x ** 2 + 0.63 * x + 2.15
 
 
 def sample_2D_data(num_samples, fun, space):
