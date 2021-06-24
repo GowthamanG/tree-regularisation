@@ -2,6 +2,7 @@ import numpy as np
 from torch import nn
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
 
 '''
 Deprecated
@@ -62,7 +63,16 @@ def post_pruning(X_train, y_train, X_test, y_test, tree):
     #train_scores = [clf.score(X_train, y_train) for clf in clfs]
     #test_scores = [clf.score(X_test, y_test) for clf in clfs]
 
-    test_scores = [accuracy_score(y_test, clf.predict(X_test)) for clf in clfs]
+    test_scores = [clf.score(X_test, y_test) for clf in clfs]
+    train_scores = [clf.score(X_train, y_train) for clf in clfs]
+
+    plt.figure()
+    plt.grid()
+    plt.plot(ccp_alphas, test_scores)
+    plt.xlabel('effective alpha')
+    plt.ylabel('accuracy scores')
+    plt.title('Accuracy vs alpha test set')
+    plt.savefig('figures/test/alphas_plot.png')
 
     # Select the alpha with max test accuracy
     index_best_model = np.argmax(test_scores)
