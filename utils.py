@@ -75,6 +75,7 @@ def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha
     img = ImagePIL.open(f'{path}.png')
     fig_DT = plt.figure()
     plt.imshow(img)
+    plt.title(f'DT with $\alpha\*: {ccp_alpha}')
 
     xx, yy = np.meshgrid(np.linspace(space[0][0], space[0][1], 100),
                          np.linspace(space[0][0], space[0][1], 100))
@@ -85,6 +86,7 @@ def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha
     fig_contour = plt.figure()
     plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
     plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
+    plt.title(f'DT Contourplot with $\alpha\*: {ccp_alpha}')
     plt.savefig(f'{path}_contourplot.png')
 
     return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha

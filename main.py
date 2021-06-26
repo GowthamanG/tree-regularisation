@@ -296,7 +296,7 @@ def init(path, strength, regulariser):
     writer = SummaryWriter()
 
     fun = parabola # either use paraobla, polynom_3, polynom_3 or create a new one
-    if args.s:
+    if args.save:
         X, Y = sample_2D_data(num_samples, fun, space)
         save_data(X, Y, 'dataset/data_parabola')
 
