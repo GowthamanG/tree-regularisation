@@ -28,9 +28,9 @@ def sample_2D_data(num_samples, fun, space):
             labels[i] = 1
 
         if y > fun(x) and (y < fun(x - 0.1) or y < fun(x + 0.1)):
-            labels[i] = np.random.binomial(n=1, p=0.5)
+            labels[i] = np.random.binomial(n=1, p=0.8)
 
         if y < fun(x) and (y > fun(x - 0.1) or y > fun(x + 0.1)):
-            labels[i] = np.random.binomial(n=1, p=0.5)
+            labels[i] = np.random.binomial(n=1, p=0.2)
 
     return samples, labels

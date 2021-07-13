@@ -1,7 +1,7 @@
 import numpy as np
 from torch import nn
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.model_selection import GridSearchCV
 import matplotlib.pyplot as plt
 
 '''
@@ -41,40 +41,47 @@ def average_path_length(X_train, X_test, y_test, model: nn.Module, ccp_alpha):
     return average_tree_length(X_tree, tree)
 
 
-
-
-def post_pruning(X_train, y_train, X_test, y_test, tree):
+def post_pruning(X, Y, X_train, y_train, X_test, y_test):
     # https://medium.com/swlh/post-pruning-decision-trees-using-python-b5d4bcda8e23
     # https://scikit-learn.org/stable/auto_examples/tree/plot_cost_complexity_pruning.html#sphx-glr-auto-examples-tree-plot-cost-complexity-pruning-py
 
-    path = tree.cost_complexity_pruning_path(X_train, y_train)
+    clf = DecisionTreeClassifier()
+    clf.fit(X_train, y_train)
+
+    path = clf.cost_complexity_pruning_path(X_train, y_train)
     ccp_alphas, impurities = path.ccp_alphas, path.impurities
-
-    clfs = []
-    for ccp_alpha in ccp_alphas:
-        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
-        clf.fit(X_train, y_train)
-        clfs.append(clf)
-
-    # remove last tree since it is a trivial one with only one node
-    clfs = clfs[:-1]
     ccp_alphas = ccp_alphas[:-1]
 
-    #train_scores = [clf.score(X_train, y_train) for clf in clfs]
-    #test_scores = [clf.score(X_test, y_test) for clf in clfs]
+    parameters = {'ccp_alpha': ccp_alphas.tolist()}
 
-    test_scores = [clf.score(X_test, y_test) for clf in clfs]
-    train_scores = [clf.score(X_train, y_train) for clf in clfs]
+    dt = DecisionTreeClassifier()
+    clf = GridSearchCV(dt, parameters, cv=10)
+    clf.fit(X, Y)
 
-    plt.figure()
-    plt.grid()
-    plt.plot(ccp_alphas, test_scores)
-    plt.xlabel('effective alpha')
-    plt.ylabel('accuracy scores')
-    plt.title('Accuracy vs alpha test set')
-    plt.savefig('figures/test/alphas_plot.png')
+    return clf.best_params_['ccp_alpha']
 
-    # Select the alpha with max test accuracy
-    index_best_model = np.argmax(test_scores)
-
-    return clfs[index_best_model], ccp_alphas[index_best_model]
+    # clfs = []
+    # for ccp_alpha in ccp_alphas:
+    #     clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+    #     clf.fit(X_train, y_train)
+    #     clfs.append(clf)
+    #
+    # # remove last tree since it is a trivial one with only one node
+    # clfs = clfs[:-1]
+    # ccp_alphas = ccp_alphas[:-1]
+    #
+    # test_scores = [clf.score(X_test, y_test) for clf in clfs]
+    # train_scores = [clf.score(X_train, y_train) for clf in clfs]
+    #
+    # plt.figure()
+    # plt.grid()
+    # plt.plot(ccp_alphas, test_scores)
+    # plt.xlabel('effective alpha')
+    # plt.ylabel('accuracy scores')
+    # plt.title('Accuracy vs alpha test set')
+    # plt.savefig('figures/test/alphas_plot.png')
+    #
+    # # Select the alpha with max test accuracy
+    # index_best_model = np.argmax(test_scores)
+    #
+    # return clfs[index_best_model], ccp_alphas[index_best_model]

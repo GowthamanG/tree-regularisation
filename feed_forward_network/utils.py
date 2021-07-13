@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import plot_confusion_matrix
 from decision_tree_utils import average_path_length, post_pruning
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.tree import export_graphviz
@@ -22,7 +23,7 @@ def get_data_loader(X_train, y_train, X_test, y_test, batch_size, X_val=None, y_
     #y_val = torch.tensor(y_val.reshape(-1, 1), dtype=torch.float)
 
     data_train = TensorDataset(X_train, y_train)
-    data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size)
+    data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size, shuffle=True)
     data_test = TensorDataset(X_test, y_test)
     data_test_loader = DataLoader(dataset=data_test, batch_size=batch_size)
     #data_val = TensorDataset(X_val, y_val)
@@ -51,17 +52,16 @@ def colormap(Y):
     return ['b' if y == 1 else 'r' for y in Y]
 
 
-def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha=None):
+def build_decision_tree(X, y, X_train, y_train, X_test, y_test, space, path, ccp_alpha=None):
 
     if ccp_alpha:
         final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
-        y_train_predicted = [1 if y > 0.5 else 0 for y in y_train]
-        final_decision_tree.fit(X_train, y_train_predicted)
+        final_decision_tree.fit(X_train, y_train)
     else:
-        final_decision_tree = DecisionTreeClassifier()
-        y_train_predicted = [1 if y > 0.5 else 0 for y in y_train]
-        final_decision_tree.fit(X_train, y_train_predicted)
-        final_decision_tree, ccp_alpha = post_pruning(X_train, y_train_predicted, X_test, y_test, final_decision_tree)
+        #final_decision_tree, ccp_alpha = post_pruning(X_train, y_train_predicted, X_test, y_test, final_decision_tree)
+        ccp_alpha = post_pruning(X, y, X_train, y_train, X_test, y_test)
+        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+        final_decision_tree.fit(X_train, y_train)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)
 
@@ -75,7 +75,7 @@ def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha
     img = ImagePIL.open(f'{path}.png')
     fig_DT = plt.figure()
     plt.imshow(img)
-    plt.title(f'DT with $\alpha\*: {ccp_alpha}')
+    plt.title(f'DT with alpha: {ccp_alpha}')
 
     xx, yy = np.meshgrid(np.linspace(space[0][0], space[0][1], 100),
                          np.linspace(space[0][0], space[0][1], 100))
@@ -86,7 +86,7 @@ def build_decision_tree(X_train, y_train, X_test, y_test, space, path, ccp_alpha
     fig_contour = plt.figure()
     plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
     plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
-    plt.title(f'DT Contourplot with $\alpha\*: {ccp_alpha}')
+    plt.title(f'DT Contourplot with alpha: {ccp_alpha}')
     plt.savefig(f'{path}_contourplot.png')
 
     return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha
@@ -100,7 +100,10 @@ def pred_contours(x, y, model):
         y_hat = model(torch.tensor(d, dtype=torch.float, device='cuda:0'))
         y_pred.append(y_hat.detach().cpu().numpy())
 
-    return np.array(y_pred)
+    y_pred = np.array(y_pred)
+    y_pred = np.where(y_pred > 0.5, 1, 0)
+
+    return y_pred
 
 
 def augment_data(X_train, X_test, y_test, model, device, size, ccp_alpha):
@@ -112,8 +115,9 @@ def augment_data(X_train, X_test, y_test, model, device, size, ccp_alpha):
     for _ in range(size):
 
         for param in model_copy.parameters():
-            # todo: std relativ zur absoluten Wert des Parameters, std 10-20%
+            # todo: 0.1 - 0.3 times relativ zur absoluten Wert des Parameters
             param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1*np.abs(param.data.cpu().numpy()))
+            #param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1)
             param.data = torch.tensor(param_augmented, dtype=torch.float).float().to(device)
 
         parameters.append(model_copy.parameters_to_vector())
