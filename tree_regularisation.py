@@ -14,7 +14,7 @@ class SurrogateNetwork(nn.Module):
         self.output = nn.Linear(25, 1)
 
     def forward(self, x):
-        fc1 = F.relu(self.input(x))
+        fc1 = torch.tanh(self.input(x))
         y_hat = F.softplus(self.output(fc1)) + 1
 
         return y_hat
@@ -100,20 +100,35 @@ class MySurrogateNetwork(nn.Module):
         return torch.cat(parameters, dim=0)
 
 
+class SSELoss(nn.Module):
+    def __init__(self):
+        super(SSELoss, self).__init__()
+
+    def forward(self, y, y_hat):
+        return torch.sum(torch.pow(y - y_hat, 2))
+
+
+class RMSELoss(nn.Module):
+    def __init__(self):
+        super(RMSELoss, self).__init__()
+
+    def forward(self, y, y_hat):
+        return torch.sqrt(torch.mean(torch.pow(y - y_hat, 2)))
+
+
 def train_surrogate_model(params, APLs, epsilon, learning_rate=1e-2, retrain=False, current_optimizer=None,
                           current_surrogate_model=None):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     if retrain:
-        model = SurrogateNetwork_2(params.size()[1])
+        model = SurrogateNetwork(params.size()[1])
     else:
         if current_surrogate_model is not None:
             model = current_surrogate_model
         else:
-            model = SurrogateNetwork_2(params.size()[1])
+            model = SurrogateNetwork(params.size()[1])
 
-    X_train, X_val, y_train, y_val = train_test_split(params.cpu().detach().numpy(), APLs.numpy(), test_size=0.01,
-                                                        random_state=42)
+    X_train, X_val, y_train, y_val = train_test_split(params.cpu().detach().numpy(), APLs.numpy(), test_size=0.01, random_state=42)
 
     model.to(device)
     criterion = nn.MSELoss()
@@ -123,7 +138,7 @@ def train_surrogate_model(params, APLs, epsilon, learning_rate=1e-2, retrain=Fal
         optimizer.load_state_dict(current_optimizer)
 
     num_epochs = 50
-    batch_size = 64
+    batch_size = 100
 
     X_train = torch.tensor(X_train, dtype=torch.float)
     y_train = torch.tensor(y_train.reshape(-1, 1), dtype=torch.float)
@@ -145,19 +160,19 @@ def train_surrogate_model(params, APLs, epsilon, learning_rate=1e-2, retrain=Fal
         for i, batch in enumerate(data_train_loader):
             x_batch, y_batch = batch[0].to(device), batch[1].to(device)
 
-            # if epoch == (num_epochs // 2):
-            #     if np.abs(training_loss[0] - training_loss[-1]) < 1e-2:
-            #         optimizer.param_groups[0]['lr'] = 2e-2
-
             y_hat = model(x_batch)
-            loss = criterion(input=y_hat, target=y_batch) + epsilon * torch.norm(model.parameters_to_vector(), 2)
+            loss = criterion(y_batch, y_hat) + epsilon * torch.norm(model.parameters_to_vector(), 2)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             batch_loss.append(loss.item() / (np.var(y_train.detach().cpu().numpy()) + 0.01))
+            #batch_loss.append(loss.item())
 
         training_loss.append(np.array(batch_loss).mean())
+
+        print(f'Surrogate Model: Epoch [{epoch + 1}/{num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
+
 
         model.eval()
         with torch.no_grad():
@@ -167,11 +182,28 @@ def train_surrogate_model(params, APLs, epsilon, learning_rate=1e-2, retrain=Fal
                 x, y = batch[0].to(device), batch[1].to(device)
 
                 y_hat = model(x)
-                loss = criterion(input=y_hat, target=y)
+                loss = criterion(y, y_hat)
                 batch_loss.append(loss.item())
 
             validation_loss.append(np.array(batch_loss).mean())
 
-        print(f'Surrogate Model: Epoch [{epoch + 1}/{num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
+    # Testing after training
+    model.eval()
+    y_hats = []
+    with torch.no_grad():
+        # Test with validation data
+        batch_loss = []
+        for i, batch in enumerate(data_val_loader):
+            x, y = batch[0].to(device), batch[1].to(device)
+
+            y_hat = model(x)
+            y_hats.append(y_hat.cpu().detach().numpy())
+            loss = criterion(y, y_hat)
+            batch_loss.append(loss.item())
+
+        y_hats = np.vstack(y_hats)
+
+        for i in range(len(y_hats)):
+            print(f'Surrogate Model: Validation [y: {data_val_loader.dataset[i][1].item()}, y_hat : {y_hats[i].item()}]')
 
     return model, optimizer.state_dict(), training_loss, validation_loss

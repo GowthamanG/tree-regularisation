@@ -11,7 +11,6 @@ from sklearn.tree import DecisionTreeClassifier
 import networks
 import tree_regularisation as tr
 import decision_tree_utils as dtu
-from loss import L1RegularisedLoss, L2RegularisedLoss, TreeRegularisedLoss
 from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data, pred_contours
 from sklearn.metrics import accuracy_score
 import argparse
@@ -30,20 +29,20 @@ def parser():
     parser.add_argument('--ep',
                         type=int,
                         required=False,
-                        default=300,
-                        help='Number of epochs, default 150')
+                        default=250,
+                        help='Number of epochs, default 250')
 
     parser.add_argument('--batch',
                         type=int,
-                        default=64,
+                        default=100,
                         required=False,
                         help='Batch size, default 100')
 
     parser.add_argument('--lr',
                         type=float,
                         required=False,
-                        default=1e-2,
-                        help='Learning rate, default 1e-2')
+                        default=1e-3,
+                        help='Learning rate, default 1e-3')
 
     parser.add_argument('--lr_sr',
                         type=float,
@@ -128,7 +127,7 @@ def train_surrogate_model_with_aggregation(W, APLs, learning_rate, epsilon, opti
 
 def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, strength, dim, path, args):
 
-    model = networks.Net1(input_dim=dim)
+    model = networks.Net2(input_dim=dim)
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda:0"
@@ -160,7 +159,6 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
     surrogate_training_loss = []
     surrogate_validation_loss = []
 
-    loss_without_reg_plot = []
     omega_plot = []
     sr_val_loss = []
 
@@ -236,21 +234,25 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
             y_hat = model(x_batch)
 
             if surrogate_model_trained:
-                surrogate_model.zero_grad()
-                surrogate_model.eval()
 
-                omega = lambda x: {
+                for param in surrogate_model.parameters():
+                    param.data.requires_grad = False
+
+                #surrogate_model.eval()
+
+                regularisation_term  = lambda x: {
                     'l1': torch.norm(x, 1),
                     'l2': torch.norm(x, 2),
                     'tr': surrogate_model(x)
                 }
 
-                regularization_parameter = omega(model.parameters_to_vector())[regulariser]
-                loss = criterion(input=y_hat, target=y_batch) + regularization_strength * regularization_parameter
-                loss_without_reg = criterion(input=y_hat, target=y_batch)
+                omega = regularisation_term(model.parameters_to_vector())[regulariser]
+
+                loss = 0*criterion(input=y_hat, target=y_batch) + regularization_strength * omega
+                loss_without_reg = criterion(input=y_hat, target=y_batch) # Only for plotting purpose
 
                 batch_loss_without_reg.append(loss_without_reg.item())
-                omega_plot.append(omega(model.parameters_to_vector())[regulariser])
+                omega_plot.append(regularisation_term(model.parameters_to_vector())[regulariser])
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -279,25 +281,31 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
 
         print(f'Epoch: [{epoch + 1}/{num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
         training_loss.append(np.array(batch_loss).mean())
-        loss_without_reg_plot.append(np.array(batch_loss_without_reg).mean())
+        training_loss_without_reg.append(np.array(batch_loss_without_reg).mean())
 
         num_iter -= 1
 
     surrogate_training_loss = torch.tensor(surrogate_training_loss).flatten()
     surrogate_validation_loss = torch.tensor(surrogate_validation_loss).flatten()
 
-    fig, (ax1, ax2) = plt.subplots(2, 1)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
     ax1.plot(range(0, len(training_loss)), training_loss)
     ax1.set_xlabel('epochs')
     ax1.set_ylabel('loss')
+    ax1.grid()
     ax1.set_title(f'Training loss, $\lambda$: {regularization_strength}, {regulariser}')
 
-    ax2.plot(range(0, len(surrogate_training_loss)), surrogate_training_loss, label='Training Loss')
-    ax2.plot(range(0, len(surrogate_validation_loss)), surrogate_validation_loss, label='Validation Loss')
-    ax2.legend()
+    ax2.plot(range(0, len(surrogate_training_loss)), surrogate_training_loss)
     ax2.set_xlabel('training iteration')
     ax2.set_ylabel('loss')
+    ax2.grid()
     ax2.set_title(f'Surrogate Training Loss, $\lambda$: {regularization_strength}, {regulariser}')
+
+    ax3.plot(range(0, len(surrogate_validation_loss)), surrogate_validation_loss, c='r')
+    ax3.set_xlabel('training iteration')
+    ax3.set_ylabel('loss')
+    ax3.grid()
+    ax3.set_title(f'Surrogate Validation Loss, $\lambda$: {regularization_strength}, {regulariser}')
 
     fig.tight_layout()
     fig.savefig(f'{path}/loss.png')
@@ -312,10 +320,6 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
     for i, value in enumerate(omega_plot):
         writer.add_scalar(f'Omega Values: {regulariser}', value, i)
 
-    # for i in range(len(loss_surrogate_training)):
-    #     for j in range(len(loss_surrogate_training[i])):
-    #         writer.add_scalar(f'Surrogate Training/Loss of surrogate training after epoch {i}',
-    #                           loss_surrogate_training[i][j], j)
     for i, (train_loss, val_loss) in enumerate(zip(surrogate_training_loss, surrogate_validation_loss)):
         writer.add_scalars(f'Surrogate Training Loss', {
             'train loss': train_loss,
@@ -332,7 +336,7 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
 def init(path, strength, regulariser):
 
     num_samples, dim, space = 2000, 2, [[0, 1.5], [0, 1.5]]
-    writer = SummaryWriter(log_dir=f'runs/{regulariser}_{strength}')
+    writer = SummaryWriter(log_dir=f'runs/{regulariser}_25_{strength}')
 
     fun = parabola # either use paraobla, polynom_3, polynom_3 or create a new one
     if args.save:
@@ -434,6 +438,8 @@ def init(path, strength, regulariser):
         y_test_predicted = torch.cat(y_test_predicted)
         y_test_predicted = torch.where(y_test_predicted > 0.5, 1, 0)
 
+        ## PLOTS ##
+
         xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
         xx, yy = np.meshgrid(xx, yy)
         Z = pred_contours(xx, yy, model)
@@ -521,61 +527,11 @@ def init(path, strength, regulariser):
 if __name__ == '__main__':
 
     args = parser().parse_args()
-    strengths = [0.1, 0.5, 1, 5, 10, 25, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000, 25000, 50000, 75000, 100000]
-    temp_strength = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]
     regulariser = 'tr'
+    strength = 1
 
-    for s in temp_strength:
-        fig_dir = f'figures/{regulariser}_{s}'
-        if not os.path.exists(fig_dir):
-            os.makedirs(fig_dir)
+    fig_path = f'figures/{regulariser}_25_{strength}'
+    if not os.path.exists(fig_path):
+        os.makedirs(fig_path)
 
-        init(fig_dir, s, regulariser)
-
-    # for s in temp_strength:
-    #     fig_dir = f'figures/strength_{s}'
-    #     if not os.path.exists(fig_dir):
-    #         os.makedirs(fig_dir)
-    #
-    #     init(fig_dir, s, 'tr')
-
-    # for i, s in enumerate(strengths):
-    #     os.makedirs(f'figures/{i}')
-    #     init(i, s)
-
-    # loss = []
-    #
-    # rows = 3
-    # cols = 5
-    # fig, ax = plt.subplots(rows, cols)
-    # total = len(strengths)
-    # counter = 1
-    #
-    #
-    # for i in range(0, total, 5):
-    #     for i in range(i, i+5):
-    #         training_loss = main(strength=strengths[i])
-    #         img = ImagePIL.open(f'figures/fig_test_prediction.png')
-    #         ax[i][0].imshow(img)
-    #         ax[i][0].set_title(f'Test Pred, $\lambda$: {strengths[i]}')
-    #
-    #
-    #         img = ImagePIL.open(f'figures/decision_tree_reg.png')
-    #         ax[i][1].imshow(img)
-    #         ax[i][1].set_title(f'DT, $\lambda$: {strengths[i]}')
-    #
-    #
-    #         img = ImagePIL.open(f'figures/decision_tree.png')
-    #         ax[i][2].imshow(img)
-    #         ax[i][2].set_title(f'DT_reg, $\lambda$: {strengths[i]}')
-    #
-    #
-    #         ax[i][3].plot(range(0, len(training_loss)), training_loss)
-    #         ax[i][3].set_title(f'Loss, $\lambda$: {strengths[i]}')
-    #
-    #
-    #
-    #     fig.savefig(f'figures/contour_plots_{counter}.png')
-    #     counter += 1
-    #     #plt.show()
-    #     plt.close(fig)
+    init(fig_path, strength, regulariser)

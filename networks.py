@@ -33,12 +33,13 @@ class Net2(nn.Module):  # from paper
         self.hidden_2 = nn.Linear(100, 10)
         self.output = nn.Linear(10, 1)
 
+
         self.ReLu = nn.ReLU()
 
     def forward(self, x):
-        fc1 = F.relu(self.input(x))
-        fc2 = F.relu(self.hidden_1(fc1))
-        fc3 = F.relu(self.hidden_2(fc2))
+        fc1 = torch.tanh(self.input(x))
+        fc2 = torch.tanh(self.hidden_1(fc1))
+        fc3 = torch.tanh(self.hidden_2(fc2))
 
         y_hat = self.output(fc3)
 

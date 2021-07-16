@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import plot_confusion_matrix
 from decision_tree_utils import average_path_length, post_pruning
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.tree import export_graphviz
