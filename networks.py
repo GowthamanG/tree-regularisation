@@ -1,84 +1,88 @@
 import torch
 from torch import nn
+from torch.nn.utils import parameters_to_vector
 from torch.functional import F
+from itertools import chain
 
 
-class Net1(nn.Module):
-
+class SurrogateNetwork(nn.Module):
     def __init__(self, input_dim):
-        super(Net1, self).__init__()
-        self.input = nn.Linear(input_dim, 50)
-        self.output = nn.Linear(50, 1)
+        super(SurrogateNetwork, self).__init__()
+
+        self.feed_forward = nn.Sequential(
+            nn.Linear(input_dim, 25),
+            nn.Tanh(),
+            nn.Linear(25, 1),
+            nn.Softplus()
+        )
 
     def forward(self, x):
-        fc1 = torch.tanh(self.input(x))
-        y_hat = self.output(fc1)
+        return self.feed_forward(x) + 1
 
-        return y_hat
-
-    def parameters_to_vector(self):
-        parameters = []
+    def freeze_model(self):
         for param in self.parameters():
-            parameters.append(torch.flatten(param))
+            param.requires_grad = False
 
-        return torch.cat(parameters, dim=0)
+    def unfreeze_model(self):
+        for param in self.parameters():
+            param.requires_grad = True
+
+    @property
+    def get_parameter_vector(self) -> torch.Tensor:
+        return parameters_to_vector(self.feed_forward.parameters())
 
 
-class Net2(nn.Module):  # from paper
-
+class TreeNet(nn.Module):
     def __init__(self, input_dim):
-        super(Net2, self).__init__()
-        self.input = nn.Linear(input_dim, 100)
-        self.hidden_1 = nn.Linear(100, 100)
-        self.hidden_2 = nn.Linear(100, 10)
-        self.output = nn.Linear(10, 1)
+        super(TreeNet, self).__init__()
 
-
-        self.ReLu = nn.ReLU()
+        self.feed_forward = nn.Sequential(
+            nn.Linear(input_dim, 100),
+            nn.Tanh(),
+            nn.Linear(100, 100),
+            nn.Tanh(),
+            nn.Linear(100, 10),
+            nn.Tanh(),
+            nn.Linear(10, 1)
+        )
+        self.surrogate_network = SurrogateNetwork(self.get_parameter_vector.shape[0])
+        self.surrogate_network.freeze_model()
 
     def forward(self, x):
-        fc1 = torch.tanh(self.input(x))
-        fc2 = torch.tanh(self.hidden_1(fc1))
-        fc3 = torch.tanh(self.hidden_2(fc2))
+        return self.feed_forward(x)
 
-        y_hat = self.output(fc3)
+    def compute_APL_prediction(self):
+        return self.surrogate_network(self.get_parameter_vector)
 
-        return y_hat
+    def freeze_model(self):
+        for param in self.feed_forward.parameters():
+            param.requires_grad = False
 
-    def parameters_to_vector(self):
-        parameters = []
-        for param in self.parameters():
-            parameters.append(torch.flatten(param))
+    def unfreeze_model(self):
+        for param in self.feed_forward.parameters():
+            param.requires_grad = True
 
-        return torch.cat(parameters, dim=0)
+    def reset_outer_weights(self):
+        """
+        Reset all weights of the feed forward network for random restarts.
+        Required for initial surrogate data.
+        :return:
+        """
+        self.feed_forward.apply(lambda m: isinstance(m, nn.Linear) and m.reset_parameters())
 
+    def reset_surrogate_weights(self):
+        """
+        Reset all weights of the feed forward network for random restarts.
+        Required for initial surrogate data.
+        :return:
+        """
+        self.surrogate_network.apply(lambda m: isinstance(m, nn.Linear) and m.reset_parameters())
 
-class Net3(nn.Module):
+    @property
+    def get_parameter_vector(self) -> torch.Tensor:
+        return parameters_to_vector(self.feed_forward.parameters())
 
-    def __init__(self, input_dim):
-        super(Net3, self).__init__()
-        self.input = nn.Linear(input_dim, 64)
-        self.hidden_1 = nn.Linear(64, 32)
-        self.hidden_2 = nn.Linear(32, 16)
-        self.output = nn.Linear(16, 1)
-
-    def forward(self, x):
-        fc1 = F.relu(self.input(x))
-        fc2 = F.relu(self.hidden_1(fc1))
-        fc3 = F.relu(self.hidden_2(fc2))
-
-        y_hat = self.output(fc3)
-
-        return y_hat
-
-    def parameters_to_vector(self):
-        parameters = []
-        for param in self.parameters():
-            parameters.append(torch.flatten(param))
-
-        return torch.cat(parameters, dim=0)
-
-
+# Custom Neural Network generator
 class MyNet(nn.Module):
 
     def __init__(self, dimensions: list):
@@ -95,9 +99,5 @@ class MyNet(nn.Module):
 
         return output
 
-    def parameters_to_vector(self):
-        parameters = []
-        for param in self.parameters():
-            parameters.append(torch.flatten(param))
-
-        return torch.cat(parameters, dim=0)
+    def get_parameter_vector(self):
+        return torch.cat([torch.flatten(x) for x in self.parameters()])

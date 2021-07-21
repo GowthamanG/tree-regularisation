@@ -3,13 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from torch import nn
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.utils.tensorboard import SummaryWriter
 from datasets import sample_2D_data, parabola
 from sklearn.metrics import confusion_matrix, plot_confusion_matrix
+from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
+from torch.utils.data import DataLoader, TensorDataset
 import networks
-import tree_regularisation as tr
 import decision_tree_utils as dtu
 from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data, pred_contours
 from sklearn.metrics import accuracy_score
@@ -21,44 +22,37 @@ def parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--path',
-                        type=str,
                         required=False,
                         default='figures',
                         help='Path wherein the figures should be stored')
 
     parser.add_argument('--ep',
-                        type=int,
                         required=False,
                         default=250,
                         help='Number of epochs, default 250')
 
     parser.add_argument('--batch',
-                        type=int,
-                        default=100,
+                        default=64,
                         required=False,
                         help='Batch size, default 100')
 
     parser.add_argument('--lr',
-                        type=float,
                         required=False,
-                        default=1e-3,
+                        default=0.02,
                         help='Learning rate, default 1e-3')
 
     parser.add_argument('--lr_sr',
-                        type=float,
                         required=False,
-                        default=1e-2,
+                        default=0.02,
                         help='Learning rate, default 1e-2')
 
     parser.add_argument('--rs',
-                        type=float,
                         required=False,
-                        default=1e-1,
+                        default=0.1,
                         help='Regularization strength for the objective, default 1e-1')
 
     parser.add_argument('--epsilon',
-                        type=float,
-                        default=1e-3,
+                        default=0.0001,
                         required=False,
                         help='Regularization strength for the surrogate training, default 1e-3')
 
@@ -95,59 +89,73 @@ def parser():
     return parser
 
 
-def train_surrogate_model(W, APLs, learning_rate, epsilon, optimizer=None, model=None):
-    X = torch.vstack(W)
-    y = torch.tensor([APLs], dtype=torch.float).T
+def train_surrogate_model(X, y, criterion, optimizer, model):
 
-    surrogate_model, optimizer_state_dict, sr_loss, test_loss = tr.train_surrogate_model(
-                                                    params=X,
-                                                    APLs=y,
-                                                    epsilon=epsilon,
-                                                    learning_rate=learning_rate,
-                                                    current_optimizer=optimizer,
-                                                    current_surrogate_model=model)
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
-    return surrogate_model, optimizer_state_dict, sr_loss, test_loss
+    X = torch.vstack(X)
+    y = torch.tensor([y], dtype=torch.float).T
 
+    X_train = X.cpu().detach().numpy()
+    y_train = y.numpy()
 
-def train_surrogate_model_with_aggregation(W, APLs, learning_rate, epsilon, optimizer=None, model=None):
-    X = torch.vstack(W)
-    y = torch.tensor([APLs], dtype=torch.float).T
+    model.surrogate_network.to(device)
 
-    surrogate_model, optimizer_state_dict, sr_loss, test_loss = tr.train_surrogate_model(
-                                                    params=X,
-                                                    APLs=y,
-                                                    epsilon=epsilon,
-                                                    learning_rate=learning_rate,
-                                                    current_optimizer=optimizer,
-                                                    current_surrogate_model=model)
+    num_epochs = 50
+    batch_size = 32
 
-    return surrogate_model, optimizer_state_dict, sr_loss, test_loss
+    X_train = torch.tensor(X_train, dtype=torch.float)
+    y_train = torch.tensor(y_train.reshape(-1, 1), dtype=torch.float)
+
+    data_train = TensorDataset(X_train, y_train)
+    data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size, shuffle=True)
+
+    training_loss = []
+    validation_loss = []
+
+    model.surrogate_network.train()
+
+    for epoch in range(num_epochs):
+        batch_loss = []
+
+        for i, batch in enumerate(data_train_loader):
+            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+
+            y_hat = model.surrogate_network(x_batch)
+            loss = criterion(input=y_hat, target=y_batch)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            batch_loss.append(float(loss) / (np.var(y_train.cpu().detach().numpy()) + 0.01))
+            # batch_loss.append(loss.item())
+
+        training_loss.append(np.array(batch_loss).mean())
+
+        print(f'Surrogate Model: Epoch [{epoch + 1}/{num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
+
+    return training_loss
 
 
 def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, strength, dim, path, args):
+    device = "cuda:0" if torch.cuda.is_available() else 'cpu'
 
-    model = networks.Net2(input_dim=dim)
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda:0"
-        if torch.cuda.device_count() > 1:
-            model = nn.DataParallel(model)
+    model = networks.TreeNet(input_dim=dim)
     model.to(device)
 
     # Hypterparameters
     num_epochs = args.ep
     batch_size = args.batch
-    regularization_strength = strength
-    learning_rate = args.lr
+    lambda_ = strength
+    learning_rate = 1e-3
+    learning_rate_sr = 1e-2
+    epsilon = 1e-5
 
     # Objectives and Optimizer
     criterion = nn.BCEWithLogitsLoss()
-    #criterion = TreeRegularisedLoss(nn.BCEWithLogitsLoss(), regularization_strength)
-    optimizer = Adam(model.parameters(), lr=learning_rate)
-    surrogate_model = None
-    optimizer_surrogate_model = None
-    surrogate_model_trained = False
+    optimizer = Adam(model.feed_forward.parameters(), lr=1e-2)
+    criterion_sr = nn.MSELoss()
+    optimizer_sr = SGD(model.surrogate_network.parameters(), lr=1e-2, weight_decay=1e-5)
 
     num_iter = args.sr_batch
     input_data_st = []
@@ -162,111 +170,61 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
     omega_plot = []
     sr_val_loss = []
 
+    surrogate_model_trained = False
+
     for epoch in range(num_epochs):
         model.train()
         batch_loss = []
         batch_loss_without_reg = []
 
-        # Train surrogate model after every 'num_iter'
-        if num_iter == 0:
-            fig = plt.figure()
-            plt.hist(APLs)
-            plt.title(f'Histogram of APLs after epoch {epoch + 1}')
-            plt.xlabel('APLs')
-            writer.add_figure(f'APL Histogram/APLs Histogram after epoch: {epoch + 1}', fig)
-            plt.close(fig)
 
-            ######## Surrogate Training with/without aggregation, train/retrain surrogate model##############
 
+        if epoch % 25 == 0 and epoch > 0:
             input_data_st_augmented, APLs_augmented = augment_data(data_train_loader.dataset[:][0].to(device),
                                                                    data_test_loader.dataset[:][0],
                                                                    data_test_loader.dataset[:][1], model, device,
                                                                    len(APLs), ccp_alpha)
 
-            if args.agg:
-                # Train surrogate model without input (weights) aggregation
-                if args.sw:
-                    surrogate_model, optimizer_surrogate_model, train_loss, val_loss = train_surrogate_model_with_aggregation(
-                        input_data_st + input_data_st_augmented,
-                        APLs + APLs_augmented,
-                        args.lr_sr,
-                        args.epsilon,
-                        optimizer=optimizer_surrogate_model,
-                        model=surrogate_model)
+            model.freeze_model()
+            model.surrogate_network.unfreeze_model()
+            model.reset_surrogate_weights()
+            optimizer.zero_grad()
 
-
-                else:
-                    surrogate_model, optimizer_surrogate_model, train_loss, val_loss = train_surrogate_model_with_aggregation(
-                        input_data_st + input_data_st_augmented,
-                        APLs + APLs_augmented,
-                        args.lr_sr,
-                        args.epsilon)
-
-            else:
-                # Train surrogate model without input (weights) aggregation
-                if args.sw:
-                    surrogate_model, optimizer_surrogate_model, train_loss, val_loss = train_surrogate_model(
-                        input_data_st + input_data_st_augmented,
-                        APLs + APLs_augmented,
-                        args.lr_sr,
-                        args.epsilon,
-                        optimizer=optimizer_surrogate_model,
-                        model=surrogate_model)
-                else:
-                    surrogate_model, optimizer_surrogate_model, train_loss, val_loss = train_surrogate_model(
-                        input_data_st + input_data_st_augmented,
-                        APLs + APLs_augmented,
-                        args.lr_sr,
-                        args.epsilon)
-
-                input_data_st = []
-                APLs = []
-
-            num_iter = args.sr_batch
+            sr_train_loss = train_surrogate_model(input_data_st, APLs,
+                                                    criterion_sr, optimizer_sr, model)
+            surrogate_training_loss.append(sr_train_loss)
             surrogate_model_trained = True
-            surrogate_training_loss.append(train_loss)
-            surrogate_validation_loss.append(val_loss)
 
-        # Training loop of the first network
+            model.surrogate_network.freeze_model()
+            model.unfreeze_model()
+            model.surrogate_network.eval()
+
+            del input_data_st_augmented
+            del APLs_augmented
+            del sr_train_loss
+
         for i, batch in enumerate(data_train_loader):
             x_batch, y_batch = batch[0].to(device), batch[1].to(device)
 
             y_hat = model(x_batch)
 
             if surrogate_model_trained:
-
-                for param in surrogate_model.parameters():
-                    param.data.requires_grad = False
-
-                #surrogate_model.eval()
-
-                regularisation_term  = lambda x: {
-                    'l1': torch.norm(x, 1),
-                    'l2': torch.norm(x, 2),
-                    'tr': surrogate_model(x)
-                }
-
-                omega = regularisation_term(model.parameters_to_vector())[regulariser]
-
-                loss = 0*criterion(input=y_hat, target=y_batch) + regularization_strength * omega
-                loss_without_reg = criterion(input=y_hat, target=y_batch) # Only for plotting purpose
-
-                batch_loss_without_reg.append(loss_without_reg.item())
-                omega_plot.append(regularisation_term(model.parameters_to_vector())[regulariser])
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
+                omega = model.compute_APL_prediction()
+                loss = criterion(input=y_hat, target=y_batch) + lambda_ * omega
             else:
                 loss = criterion(input=y_hat, target=y_batch)
-                batch_loss_without_reg.append(loss.item())
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+            loss_without_reg = criterion(input=y_hat, target=y_batch)  # Only for plotting purpose
 
-            batch_loss.append(loss.item())
+            batch_loss_without_reg.append(float(loss_without_reg))
+            del loss_without_reg
+            omega_plot.append(model.compute_APL_prediction())
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            batch_loss.append(float(loss))
 
             # Stack model parameters and APLs after every epoch for surrogate training
             average_path_length = dtu.average_path_length(X_train=data_train_loader.dataset[:][0].to(device),
@@ -276,36 +234,31 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
                                                           ccp_alpha=ccp_alpha)
 
             # Collect weights and APLs for surrogate training
-            input_data_st.append(model.parameters_to_vector())
+            #input_data_st.append(model.get_parameter_vector()[:-input_dim_surrogate_model])
+            input_data_st.append(model.get_parameter_vector)
             APLs.append(average_path_length)
+
+            del x_batch
+            del y_batch
 
         print(f'Epoch: [{epoch + 1}/{num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
         training_loss.append(np.array(batch_loss).mean())
         training_loss_without_reg.append(np.array(batch_loss_without_reg).mean())
 
-        num_iter -= 1
-
     surrogate_training_loss = torch.tensor(surrogate_training_loss).flatten()
-    surrogate_validation_loss = torch.tensor(surrogate_validation_loss).flatten()
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
+    fig, (ax1, ax2) = plt.subplots(2, 1)
     ax1.plot(range(0, len(training_loss)), training_loss)
     ax1.set_xlabel('epochs')
     ax1.set_ylabel('loss')
     ax1.grid()
-    ax1.set_title(f'Training loss, $\lambda$: {regularization_strength}, {regulariser}')
+    ax1.set_title(f'Training loss, $\lambda$: {lambda_}, {regulariser}')
 
     ax2.plot(range(0, len(surrogate_training_loss)), surrogate_training_loss)
     ax2.set_xlabel('training iteration')
     ax2.set_ylabel('loss')
     ax2.grid()
-    ax2.set_title(f'Surrogate Training Loss, $\lambda$: {regularization_strength}, {regulariser}')
-
-    ax3.plot(range(0, len(surrogate_validation_loss)), surrogate_validation_loss, c='r')
-    ax3.set_xlabel('training iteration')
-    ax3.set_ylabel('loss')
-    ax3.grid()
-    ax3.set_title(f'Surrogate Validation Loss, $\lambda$: {regularization_strength}, {regulariser}')
+    ax2.set_title(f'Surrogate Training Loss, $\lambda$: {lambda_}, {regulariser}')
 
     fig.tight_layout()
     fig.savefig(f'{path}/loss.png')
@@ -320,15 +273,13 @@ def train(data_train_loader, data_test_loader, writer, ccp_alpha, regulariser, s
     for i, value in enumerate(omega_plot):
         writer.add_scalar(f'Omega Values: {regulariser}', value, i)
 
-    for i, (train_loss, val_loss) in enumerate(zip(surrogate_training_loss, surrogate_validation_loss)):
-        writer.add_scalars(f'Surrogate Training Loss', {
-            'train loss': train_loss,
-            'validation loss': val_loss
-        }, i)
+    for i, value in enumerate(surrogate_training_loss):
+        writer.add_scalar(f'Surrogate Training Loss: {regulariser}', value, i)
 
     del input_data_st
     del APLs
-    del surrogate_model
+    del criterion_sr
+    del optimizer_sr
 
     return model, criterion, device
 

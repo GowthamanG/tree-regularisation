@@ -110,16 +110,21 @@ def augment_data(X_train, X_test, y_test, model, device, size, ccp_alpha):
     parameters = []
     APLs = []
 
+    # input_dim_surrogate_model = model_copy.surrogate_model.get_parameter_vector().shape[0]
+
     model_copy.eval()
     for _ in range(size):
 
-        for param in model_copy.parameters():
+        for param in model_copy.feed_forward.parameters():
+            param.data.requires_grad = False
+
             # todo: 0.1 - 0.3 times relativ zur absoluten Wert des Parameters
-            param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1*np.abs(param.data.cpu().numpy()))
-            #param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1)
+            param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1 * np.abs(param.data.cpu().numpy()))
+            # param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1)
             param.data = torch.tensor(param_augmented, dtype=torch.float).float().to(device)
 
-        parameters.append(model_copy.parameters_to_vector())
+        # parameters.append(model_copy.get_parameter_vector()[:-input_dim_surrogate_model])
+        parameters.append(model_copy.get_parameter_vector)
         APLs.append(average_path_length(X_train, X_test, y_test, model_copy, ccp_alpha))
 
     del model_copy
