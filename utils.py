@@ -1,11 +1,12 @@
 import copy
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
-from decision_tree_utils import average_path_length, post_pruning
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import cross_val_score
 from sklearn.tree import export_graphviz
 from six import StringIO
 from IPython.display import Image
@@ -50,16 +51,37 @@ def save_data(X, Y, filename: str):
 def colormap(Y):
     return ['b' if y == 1 else 'r' for y in Y]
 
+def post_pruning(X, y):
+    # https://medium.com/swlh/post-pruning-decision-trees-using-python-b5d4bcda8e23
+    # https://scikit-learn.org/stable/auto_examples/tree/plot_cost_complexity_pruning.html#sphx-glr-auto-examples-tree-plot-cost-complexity-pruning-py
 
-def build_decision_tree(X, y, X_train, y_train, X_test, y_test, space, path, ccp_alpha=None):
+    clf = DecisionTreeClassifier(random_state=42)
+    path = clf.cost_complexity_pruning_path(X, y)
+    ccp_alphas, impurities = path.ccp_alphas, path.impurities
+    ccp_alphas = ccp_alphas[:-1]
+    scores = []
+    for ccp_alpha in ccp_alphas:
+        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha, min_samples_leaf=5)
+        score = cross_val_score(clf, X, y, cv=5, scoring="neg_mean_squared_error", n_jobs=-1)
+        scores.append(score)
+
+    # average over folds, fix sign of mse
+    fold_mse = -np.mean(scores, 1)
+    # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
+    # the minimum mse.
+    # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
+    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + np.std(fold_mse)])
+
+    return selected_alpha
+
+def build_decision_tree(X, y, X_train, y_train, X_test, space, path, ccp_alpha=None):
 
     if ccp_alpha:
-        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+        final_decision_tree = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha, random_state=42)
         final_decision_tree.fit(X_train, y_train)
     else:
-        #final_decision_tree, ccp_alpha = post_pruning(X_train, y_train_predicted, X_test, y_test, final_decision_tree)
-        ccp_alpha = post_pruning(X, y, X_train, y_train, X_test, y_test)
-        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+        ccp_alpha = post_pruning(X_train, y_train)
+        final_decision_tree = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha, random_state=42)
         final_decision_tree.fit(X_train, y_train)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)
@@ -75,6 +97,7 @@ def build_decision_tree(X, y, X_train, y_train, X_test, y_test, space, path, ccp
     fig_DT = plt.figure()
     plt.imshow(img)
     plt.title(f'DT with alpha: {ccp_alpha}')
+    plt.close(fig_DT)
 
     xx, yy = np.meshgrid(np.linspace(space[0][0], space[0][1], 100),
                          np.linspace(space[0][0], space[0][1], 100))
@@ -84,9 +107,10 @@ def build_decision_tree(X, y, X_train, y_train, X_test, y_test, space, path, ccp
     Z = Z.reshape(xx.shape)
     fig_contour = plt.figure()
     plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-    plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
+    plt.scatter(*X.T, c=colormap(y), edgecolors='k')
     plt.title(f'DT Contourplot with alpha: {ccp_alpha}')
     plt.savefig(f'{path}_contourplot.png')
+    plt.close(fig_contour)
 
     return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha
 
@@ -105,28 +129,56 @@ def pred_contours(x, y, model):
     return y_pred
 
 
-def augment_data(X_train, X_test, y_test, model, device, size, ccp_alpha):
-    model_copy = copy.deepcopy(model)
+def augment_data_with_gaussian(X_train, model, device, size, ccp_alpha):
+
     parameters = []
     APLs = []
 
-    # input_dim_surrogate_model = model_copy.surrogate_model.get_parameter_vector().shape[0]
-
-    model_copy.eval()
     for _ in range(size):
+
+        model_copy = copy.deepcopy(model)
+        model_copy.eval()
 
         for param in model_copy.feed_forward.parameters():
             param.data.requires_grad = False
 
-            # todo: 0.1 - 0.3 times relativ zur absoluten Wert des Parameters
+            # variance: 0.1 - 0.3 times relative to the absolute value of the model parameter
             param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1 * np.abs(param.data.cpu().numpy()))
             # param_augmented = np.random.normal(param.data.cpu().numpy(), 0.1)
             param.data = torch.tensor(param_augmented, dtype=torch.float).float().to(device)
 
-        # parameters.append(model_copy.get_parameter_vector()[:-input_dim_surrogate_model])
         parameters.append(model_copy.get_parameter_vector)
-        APLs.append(average_path_length(X_train, X_test, y_test, model_copy, ccp_alpha))
+        APLs.append(model_copy.compute_APL(X_train, ccp_alpha))
 
-    del model_copy
+        del model_copy
 
     return parameters, APLs
+
+
+def augment_data_with_dirichlet(X_train, parameters, model, device, num_new_samples, ccp_alpha):
+
+    parameters_new = []
+    APLs_new = []
+    num_parameters = len(parameters)
+
+    alpha = [1]*num_parameters
+    samples = np.random.dirichlet(alpha, num_new_samples)
+    parameters = torch.vstack(parameters)
+    samples = torch.from_numpy(samples).float().to(device)
+    parameters_ = samples @ parameters
+
+    model_copy = copy.deepcopy(model)
+    model_copy.eval()
+
+    for param in parameters_:
+        model_copy.vector_to_parameters(param)
+        APL = model_copy.compute_APL(X_train, ccp_alpha)
+
+        parameters_new.append(param)
+        APLs_new.append(APL)
+
+    del model_copy
+    del parameters_
+    del samples
+
+    return parameters_new, APLs_new
