@@ -243,7 +243,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             if surrogate_model_trained:
                 omega = model.compute_APL_prediction()
-                loss = lambda_ * omega
+                loss = criterion(input=y_hat, target=y_batch) + lambda_ * omega
             else:
                 loss = criterion(input=y_hat, target=y_batch)
 
