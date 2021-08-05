@@ -372,7 +372,7 @@ def init(path, tb_logs_path, strength, regulariser):
     writer = SummaryWriter(log_dir=tb_logs_path)
 
     fun = parabola  # either use paraobla, polynom_3, polynom_3 or create a new one
-    if args.save:
+    if args.sample:
         X, Y = sample_2D_data(num_samples, fun, space)
         save_data(X, Y, 'feed_forward_network/dataset/parabola/data_parabola')
 
