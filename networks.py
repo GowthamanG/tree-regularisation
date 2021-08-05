@@ -6,6 +6,8 @@ from sklearn.tree import DecisionTreeClassifier
 import numpy as np
 from itertools import chain
 
+np.random.seed(5555)
+torch.random.manual_seed(5255)
 
 class SurrogateNetwork(nn.Module):
     def __init__(self, input_dim):
@@ -13,7 +15,7 @@ class SurrogateNetwork(nn.Module):
 
         self.feed_forward = nn.Sequential(
             nn.Linear(input_dim, 25),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(25, 1),
             nn.Softplus()
         )
@@ -42,11 +44,11 @@ class TreeNet(nn.Module):
 
         self.feed_forward = nn.Sequential(
             nn.Linear(input_dim, 100),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(100, 100),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(100, 10),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(10, 1)
         )
         self.surrogate_network = SurrogateNetwork(self.parameters_to_vector().numel())
