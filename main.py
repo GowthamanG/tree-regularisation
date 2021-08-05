@@ -10,31 +10,49 @@ from sklearn.metrics import plot_confusion_matrix
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
 import networks
-from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data_with_gaussian, augment_data_with_dirichlet, pred_contours
+from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data_with_gaussian, \
+    augment_data_with_dirichlet, pred_contours
 from sklearn.metrics import accuracy_score
 import argparse
 from PIL import Image as ImagePIL
+
+np.random.seed(5555)
+torch.random.manual_seed(5255)
 
 
 def parser():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--path',
+    parser.add_argument('--label',
                         required=False,
-                        default='figures',
-                        help='Path wherein the figures should be stored')
+                        type=str,
+                        default='',
+                        help='Label as postfix to the directory where all plots and tensorboard logs will be saved')
+
+    parser.add_argument('--lambda_init',
+                        required=False,
+                        type=float,
+                        default=1e-2,
+                        help='Initial lambda value as regularisation term')
+
+    parser.add_argument('--lambda_target',
+                        required=False,
+                        type=float,
+                        default=1,
+                        help='Target lambda value as regularisation term')
 
     parser.add_argument('--ep',
                         required=False,
-                        default=200,
-                        help='Number of epochs, default 250')
+                        default=300,
+                        type=int,
+                        help='Number of epochs, default 300 (150 warm up + 150 regularisation)')
 
     parser.add_argument('--batch',
                         default=32,
                         required=False,
-                        help='Batch size, default 100')
+                        help='Batch size, default 32')
 
-    parser.add_argument('--save',
+    parser.add_argument('--sample',
                         type=bool,
                         required=False,
                         default=False,
@@ -43,7 +61,7 @@ def parser():
     return parser
 
 
-def snap_shot_train(data_train_loader, device, criterion, model, epoch, path):
+def snap_shot_train(data_train_loader, device, criterion, lambda_, model, epoch, path):
     y_train_predicted = []
     X_train_temp = []
     y_train_temp = []
@@ -77,18 +95,18 @@ def snap_shot_train(data_train_loader, device, criterion, model, epoch, path):
     CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
     # plt.colorbar()
     # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
-    # plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
-    plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
+    plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
+    #plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
     plt.xlim([space[0][0], space[0][1]])
     plt.ylim([space[1][0], space[1][1]])
-    plt.title('Network Contourplot with Training data')
+    plt.title(f'Network Contourplot with Training data, $\lambda$: {lambda_}')
     # plt.plot(x_decision_fun, y_decision_fun, 'k-')
     fig.tight_layout()
     plt.savefig(f'{path}/fig_train_prediction-snapshot-epoch-{epoch}.png')
     plt.close(fig)
 
-def train_surrogate_model(X, y, criterion, optimizer, model):
 
+def train_surrogate_model(X, y, criterion, optimizer, model):
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
     X = torch.vstack(X)
@@ -96,7 +114,6 @@ def train_surrogate_model(X, y, criterion, optimizer, model):
 
     X_train = X.cpu().detach().numpy()
     y_train = y.numpy()
-
 
     model.surrogate_network.to(device)
 
@@ -153,13 +170,13 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     # Hypterparameters
     num_random_restarts = 25
     total_num_epochs = args.ep
-    epochs_warm_up = 100
+    epochs_warm_up = 150
     epochs_reg = total_num_epochs - epochs_warm_up
     lambda_init = strength
-    lambda_target = 5
+    lambda_target = args.lambda_target
     lambda_ = strength
 
-    alpha = (lambda_target/lambda_init) ** (1/epochs_reg)
+    alpha = (lambda_target / lambda_init) ** (1 / epochs_reg)
 
     # Objectives and Optimizer
     criterion = nn.BCEWithLogitsLoss()
@@ -186,7 +203,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
         input_surrogate.append(model.parameters_to_vector())
         APL = model.compute_APL(X_apl, ccp_alpha)
         APLs_surrogate.append(APL)
-        print(f'Random restart [{i+1}/{num_random_restarts}]')
+        print(f'Random restart [{i + 1}/{num_random_restarts}]')
 
     for epoch in range(total_num_epochs):
         model.train()
@@ -197,12 +214,8 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             if surrogate_model_trained:
                 lambda_ = lambda_init * (alpha ** (epoch - epochs_warm_up))
+                # lambda_ = lambda_target + (lambda_init - lambda_target) * ((epochs_reg - (epoch - epochs_warm_up)) / epochs_reg)
                 lambdas.append(lambda_)
-            #else: Todo: do we need to reset the target network for regularisation?
-                #model.eval()
-                #model.reset_outer_weights()
-                #model.train()
-                #print('Model reseted')
 
             input_surrogate_augmented, APLs_surrogate_augmented = augment_data_with_dirichlet(data_train_loader.dataset[:][0].to(device), input_surrogate, model, device, 200, ccp_alpha)
             model.freeze_model()
@@ -210,7 +223,8 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             input_surrogate_augmented = input_surrogate + input_surrogate_augmented
             APLs_surrogate_augmented = APLs_surrogate + APLs_surrogate_augmented
-            sr_train_loss = train_surrogate_model(input_surrogate_augmented, APLs_surrogate_augmented, criterion_sr, optimizer_sr, model)
+            sr_train_loss = train_surrogate_model(input_surrogate_augmented, APLs_surrogate_augmented, criterion_sr,
+                                                  optimizer_sr, model)
             surrogate_training_loss.append(sr_train_loss)
 
             print('Lambda: ', lambda_)
@@ -221,9 +235,6 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
             model.unfreeze_model()
             model.surrogate_network.eval()
 
-            #input_data_st = []  # only use the portion of parameters where the model war regularised with the latest trained surrogate model
-            #APLs = []
-
             del input_surrogate_augmented
             del APLs_surrogate_augmented
             del sr_train_loss
@@ -231,19 +242,19 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
         if epoch % 10 == 0:  # snapshots of the resulting tree
             model.eval()
             model.freeze_model()
-            snap_shot_train(data_train_loader, device, criterion, model, epoch, path)
+            snap_shot_train(data_train_loader, device, criterion, lambda_, model, epoch, path)
             model.unfreeze_model()
             model.train()
 
         for i, batch in enumerate(data_train_loader):
 
-            optimizer.zero_grad()
             x_batch, y_batch = batch[0].to(device), batch[1].to(device)
             y_hat = model(x_batch)
 
             if surrogate_model_trained:
                 omega = model.compute_APL_prediction()
-                loss = criterion(input=y_hat, target=y_batch) + lambda_ * omega
+                loss = criterion(input=y_hat, target=y_batch) + torch.tensor(lambda_, dtype=torch.float,
+                                                                             requires_grad=True) * omega
             else:
                 loss = criterion(input=y_hat, target=y_batch)
 
@@ -261,7 +272,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             # Collect weights and APLs for surrogate training
             input_surrogate.append(model.parameters_to_vector())
-            APL = model.compute_APL(X_apl, ccp_alpha)
+            APL = model.compute_APL(data_train_loader.dataset[:][0].to(device), ccp_alpha)
             APLs_surrogate.append(APL)
             APLs_truth.append(APL)
 
@@ -304,7 +315,6 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     axs[1, 1].legend()
     axs[1, 1].grid()
     axs[1, 1].set_title(f'Path length estimates, $\lambda$: {lambda_}, {regulariser}')
-
 
     fig.tight_layout()
     fig.savefig(f'{path}/loss.png')
@@ -351,7 +361,6 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
 
 def init(path, tb_logs_path, strength, regulariser):
-
     global X_train
     global y_train
     global X_test
@@ -362,7 +371,7 @@ def init(path, tb_logs_path, strength, regulariser):
     num_samples, dim, space = 2000, 2, [[0, 1.5], [0, 1.5]]
     writer = SummaryWriter(log_dir=tb_logs_path)
 
-    fun = parabola # either use paraobla, polynom_3, polynom_3 or create a new one
+    fun = parabola  # either use paraobla, polynom_3, polynom_3 or create a new one
     if args.save:
         X, Y = sample_2D_data(num_samples, fun, space)
         save_data(X, Y, 'feed_forward_network/dataset/parabola/data_parabola')
@@ -374,7 +383,8 @@ def init(path, tb_logs_path, strength, regulariser):
     X_test, y_test = test_data_from_txt[:, :2], test_data_from_txt[:, 2]
 
     # Decision tree directly on input space
-    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train, y_train, X_test, space, f"{path}/decision_tree")
+    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train, y_train, X_test, space,
+                                                                     f"{path}/decision_tree")
     acc_DT = accuracy_score(y_test, y_hat_tree)
     writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT before reg: {acc_DT:.4f}')
     writer.add_figure(f'Decision Trees/DT before regularisation, Accuracy: {acc_DT:.4f}', fig_DT)
@@ -405,7 +415,7 @@ def init(path, tb_logs_path, strength, regulariser):
     plt.plot(x_decision_fun, y_decision_fun, 'k-')
     plt.savefig(f'{path}/samples_training_plot.png')
 
-    #plt.show()
+    # plt.show()
     writer.add_figure('Training samples', figure=fig)
     plt.close(fig)
     data_summary = f'Samples: {num_samples}  \nTraining data shape: {X_train.shape}  \nTest data shape: {X_test.shape}'
@@ -421,7 +431,7 @@ def init(path, tb_logs_path, strength, regulariser):
     ############# Evaluation ######################
     print('================Test=======================')
     model.eval()
-    X_train_temp = [] # Because training data are shuffled, collect them for plotting afterwards
+    X_train_temp = []  # Because training data are shuffled, collect them for plotting afterwards
     y_train_temp = []
 
     y_train_predicted = []
@@ -467,36 +477,41 @@ def init(path, tb_logs_path, strength, regulariser):
         fig = plt.figure()
         plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
         CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-        #plt.colorbar()
-        #plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
-        #plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
-        plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
+        # plt.colorbar()
+        # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
+        plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
+        plt.colorbar()
+        #plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
         plt.xlim([space[0][0], space[0][1]])
         plt.ylim([space[1][0], space[1][1]])
         plt.title('Network Contourplot with Training data')
-        #plt.plot(x_decision_fun, y_decision_fun, 'k-')
+        # plt.plot(x_decision_fun, y_decision_fun, 'k-')
         fig.tight_layout()
         plt.savefig(f'{path}/fig_train_prediction.png')
-        writer.add_figure(f'Inference/Inference with training data, loss: {np.array(loss_with_train_data).mean()}', figure=fig)
+        writer.add_figure(f'Inference/Inference with training data, loss: {np.array(loss_with_train_data).mean()}',
+                          figure=fig)
         plt.close(fig)
 
         # Scatterplot with test data
         fig = plt.figure()
         plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
         CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-        #plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test_predicted), edgecolors='k')
-        plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test), edgecolors='k')
+        plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test_predicted), edgecolors='k')
+        plt.colorbar()
+        #plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test), edgecolors='k')
         plt.title('Network Contourplot with Test data')
         plt.xlim([space[0][0], space[0][1]])
         plt.ylim([space[1][0], space[1][1]])
         plt.savefig(f'{path}/fig_test_prediction.png')
-        writer.add_figure(f'Inference/Inference with test data, loss {np.array(loss_with_test_data).mean()}', figure=fig)
+        writer.add_figure(f'Inference/Inference with test data, loss {np.array(loss_with_test_data).mean()}',
+                          figure=fig)
         plt.close(fig)
 
         y_train_predicted = [1 if y > 0.5 else 0 for y in y_train_predicted]
         acc_NN_train = accuracy_score(y_train_temp, y_train_predicted)
         writer.add_text('Confusion Matrices/NN with Train data', data_summary)
-        writer.add_text('Accuracy/Accuracy of NN with Train data', f'Accuracy of NN with train data: {acc_NN_train:.4f}')
+        writer.add_text('Accuracy/Accuracy of NN with Train data',
+                        f'Accuracy of NN with train data: {acc_NN_train:.4f}')
 
         y_test_predicted = [1 if y > 0.5 else 0 for y in y_test_predicted]
         acc_NN_test = accuracy_score(y_test, y_test_predicted)
@@ -505,7 +520,9 @@ def init(path, tb_logs_path, strength, regulariser):
 
     # Decision tree after regularization
 
-    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train_temp, y_train_predicted, X_test, space, f"{path}/decision_tree_reg", ccp_alpha)
+    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train_temp,
+                                                                         y_train_predicted, X_test, space,
+                                                                         f"{path}/decision_tree_reg", ccp_alpha)
     acc_DT_reg = accuracy_score(y_test, y_hat_tree)
     writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT after reg: {acc_DT_reg:.4f}')
     writer.add_figure(f'Decision Trees/DT after regularisation, Accuracy: {acc_DT_reg:.4f}', fig_DT_reg)
@@ -540,9 +557,9 @@ def init(path, tb_logs_path, strength, regulariser):
 if __name__ == '__main__':
 
     args = parser().parse_args()
-    regulariser = 'tr_with_aug'
-    strength = 1e-2
-    dir_name = f'{regulariser}_1_{strength}'
+    regulariser = 'tree_reg_train'
+    strength = args.lambda_init
+    dir_name = f'{regulariser}_{strength}_{args.label}'
 
     fig_path = f'figures/{dir_name}'
     tb_logs_path = f'runs/{dir_name}'
