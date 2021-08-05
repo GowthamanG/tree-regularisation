@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch.optim import Adam, SGD
 from torch.utils.tensorboard import SummaryWriter
-from datasets import sample_2D_data, parabola
+from datasets import sample_2D_data, parabola, polynom_6
 from sklearn.metrics import plot_confusion_matrix
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
@@ -26,7 +26,7 @@ def parser():
     parser.add_argument('--label',
                         required=False,
                         type=str,
-                        default='',
+                        default='1',
                         help='Label as postfix to the directory where all plots and tensorboard logs will be saved')
 
     parser.add_argument('--lambda_init',
@@ -371,13 +371,14 @@ def init(path, tb_logs_path, strength, regulariser):
     num_samples, dim, space = 2000, 2, [[0, 1.5], [0, 1.5]]
     writer = SummaryWriter(log_dir=tb_logs_path)
 
-    fun = parabola  # either use paraobla, polynom_3, polynom_3 or create a new one
+    fun = parabola # either use paraobla, polynom_6, or create a new one
+    fun_name = 'parabola'
     if args.sample:
         X, Y = sample_2D_data(num_samples, fun, space)
-        save_data(X, Y, 'feed_forward_network/dataset/parabola/data_parabola')
+        save_data(X, Y, f'feed_forward_network/dataset/{fun_name}/data_{fun_name}')
 
-    train_data_from_txt = np.loadtxt('dataset/parabola/data_parabola_train.txt')
-    test_data_from_txt = np.loadtxt('dataset/parabola/data_parabola_test.txt')
+    train_data_from_txt = np.loadtxt(f'dataset/{fun_name}/data_{fun_name}_train.txt')
+    test_data_from_txt = np.loadtxt(f'dataset/{fun_name}/data_{fun_name}_test.txt')
 
     X_train, y_train = train_data_from_txt[:, :2], train_data_from_txt[:, 2]
     X_test, y_test = test_data_from_txt[:, :2], test_data_from_txt[:, 2]
@@ -480,7 +481,6 @@ def init(path, tb_logs_path, strength, regulariser):
         # plt.colorbar()
         # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
         plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
-        plt.colorbar()
         #plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
         plt.xlim([space[0][0], space[0][1]])
         plt.ylim([space[1][0], space[1][1]])
@@ -497,7 +497,6 @@ def init(path, tb_logs_path, strength, regulariser):
         plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
         CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
         plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test_predicted), edgecolors='k')
-        plt.colorbar()
         #plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test), edgecolors='k')
         plt.title('Network Contourplot with Test data')
         plt.xlim([space[0][0], space[0][1]])
