@@ -13,6 +13,8 @@ from IPython.display import Image
 from PIL import Image as ImagePIL
 import pydotplus
 
+np.random.seed(5555)
+torch.random.manual_seed(5255)
 
 def get_data_loader(X_train, y_train, X_test, y_test, batch_size, X_val=None, y_val=None):
     X_train = torch.tensor(X_train, dtype=torch.float)
@@ -51,6 +53,7 @@ def save_data(X, Y, filename: str):
 def colormap(Y):
     return ['b' if y == 1 else 'r' for y in Y]
 
+
 def post_pruning(X, y):
     # https://medium.com/swlh/post-pruning-decision-trees-using-python-b5d4bcda8e23
     # https://scikit-learn.org/stable/auto_examples/tree/plot_cost_complexity_pruning.html#sphx-glr-auto-examples-tree-plot-cost-complexity-pruning-py
@@ -70,7 +73,7 @@ def post_pruning(X, y):
     # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
     # the minimum mse.
     # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
-    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + np.std(fold_mse)])
+    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + 1.5 * np.std(fold_mse)])
 
     return selected_alpha
 

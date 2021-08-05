@@ -1,5 +1,6 @@
 import numpy as np
 
+np.random.seed(5555)
 
 def parabola(x): # parabola
     return 5 * (x - 0.75) ** 2 + 0.2
