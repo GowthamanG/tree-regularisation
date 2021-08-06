@@ -64,7 +64,7 @@ def post_pruning(X, y):
     ccp_alphas = ccp_alphas[:-1]
     scores = []
     for ccp_alpha in ccp_alphas:
-        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha, min_samples_leaf=5)
+        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
         score = cross_val_score(clf, X, y, cv=5, scoring="neg_mean_squared_error", n_jobs=-1)
         scores.append(score)
 
@@ -73,18 +73,18 @@ def post_pruning(X, y):
     # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
     # the minimum mse.
     # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
-    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + 1.5 * np.std(fold_mse)])
+    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + 1.5 * np.std(fold_mse)]) # 0 - 0.5
 
     return selected_alpha
 
 def build_decision_tree(X, y, X_train, y_train, X_test, space, path, ccp_alpha=None):
 
     if ccp_alpha:
-        final_decision_tree = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha, random_state=42)
+        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha, random_state=42)
         final_decision_tree.fit(X_train, y_train)
     else:
         ccp_alpha = post_pruning(X_train, y_train)
-        final_decision_tree = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha, random_state=42)
+        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha, random_state=42)
         final_decision_tree.fit(X_train, y_train)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)

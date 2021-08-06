@@ -83,7 +83,7 @@ class TreeNet(nn.Module):
         If min_samples_leaf would be a float, this would reflect also the total numbers of samples.
         Otherwise, the trees could get more complex with bigger datasets."""
         for random_state in self.random_seeds:
-            tree = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha, random_state=random_state)
+            tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha, random_state=random_state)
             y_tree = np.where(y_tree > 0.5, 1, 0)
             tree.fit(X_tree, y_tree)
 

@@ -26,7 +26,7 @@ def parser():
     parser.add_argument('--label',
                         required=False,
                         type=str,
-                        default='1',
+                        default='new',
                         help='Label as postfix to the directory where all plots and tensorboard logs will be saved')
 
     parser.add_argument('--lambda_init',
@@ -180,7 +180,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
     # Objectives and Optimizer
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = Adam(model.feed_forward.parameters(), lr=1e-4)
+    optimizer = Adam(model.feed_forward.parameters(), lr=1e-4) #parabola --> 1e-4, polynom_3 --> 1e-3
     criterion_sr = nn.MSELoss()
     optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3)
 
@@ -528,7 +528,7 @@ def init(path, tb_logs_path, strength, regulariser):
     writer.add_figure(f'Decision Trees/DT Contourplot after regularisation, Accuracy: {acc_DT_reg:.4f}', fig_contour)
     plt.close(fig_DT_reg)
 
-    dt = DecisionTreeClassifier(min_samples_leaf=5, ccp_alpha=ccp_alpha)
+    dt = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
     dt.fit(X_train_temp, y_train_predicted)
     plot_confusion_matrix(dt, X_test, y_test)
     plt.title("Confusion Matrix Tree regularized NN")
