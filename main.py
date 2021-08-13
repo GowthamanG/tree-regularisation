@@ -6,12 +6,13 @@ from torch import nn
 from torch.optim import Adam, SGD
 from torch.utils.tensorboard import SummaryWriter
 from datasets import sample_2D_data, parabola, polynom_6
-from sklearn.metrics import plot_confusion_matrix
+from sklearn.metrics import plot_confusion_matrix, roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
 import networks
+from sklearn.preprocessing import StandardScaler
 from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data_with_gaussian, \
-    augment_data_with_dirichlet, pred_contours
+    augment_data_with_dirichlet, pred_contours, post_pruning_2
 from sklearn.metrics import accuracy_score
 import argparse
 from PIL import Image as ImagePIL
@@ -26,7 +27,7 @@ def parser():
     parser.add_argument('--label',
                         required=False,
                         type=str,
-                        default='new',
+                        default='',
                         help='Label as postfix to the directory where all plots and tensorboard logs will be saved')
 
     parser.add_argument('--lambda_init',
@@ -38,7 +39,7 @@ def parser():
     parser.add_argument('--lambda_target',
                         required=False,
                         type=float,
-                        default=1,
+                        default=3,
                         help='Target lambda value as regularisation term')
 
     parser.add_argument('--ep',
@@ -61,7 +62,7 @@ def parser():
     return parser
 
 
-def snap_shot_train(data_train_loader, device, criterion, lambda_, model, epoch, path):
+def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epoch, path):
     y_train_predicted = []
     X_train_temp = []
     y_train_temp = []
@@ -107,7 +108,6 @@ def snap_shot_train(data_train_loader, device, criterion, lambda_, model, epoch,
 
 
 def train_surrogate_model(X, y, criterion, optimizer, model):
-    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
     X = torch.vstack(X)
     y = torch.tensor([y], dtype=torch.float).T
@@ -158,31 +158,27 @@ def train_surrogate_model(X, y, criterion, optimizer, model):
     return training_loss
 
 
-def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path, args):
-    device = "cuda:0" if torch.cuda.is_available() else 'cpu'
+def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, dim, path, args):
 
     model = networks.TreeNet(input_dim=dim)
     model.to(device)
-
-    # Designated partial training data for APL computation
-    X_apl = data_train_loader.dataset[:200][0].to(device)
 
     # Hypterparameters
     num_random_restarts = 25
     total_num_epochs = args.ep
     epochs_warm_up = 150
     epochs_reg = total_num_epochs - epochs_warm_up
-    lambda_init = strength
+    lambda_init = args.lambda_init
     lambda_target = args.lambda_target
-    lambda_ = strength
+    lambda_ = lambda_init
 
     alpha = (lambda_target / lambda_init) ** (1 / epochs_reg)
 
     # Objectives and Optimizer
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = Adam(model.feed_forward.parameters(), lr=1e-4) #parabola --> 1e-4, polynom_3 --> 1e-3
+    optimizer = Adam(model.feed_forward.parameters(), lr=1e-4)
     criterion_sr = nn.MSELoss()
-    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3)
+    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3, weight_decay=1e-4)
 
     input_surrogate = []
     APLs_surrogate = []
@@ -191,6 +187,8 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     APL_predictions = []
 
     training_loss = []
+    val_loss = []
+    training_auc = []
     training_loss_without_reg = []
     surrogate_training_loss = []
 
@@ -198,17 +196,20 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
     surrogate_model_trained = False
 
+
     for i in range(num_random_restarts):
         model.reset_outer_weights()
         input_surrogate.append(model.parameters_to_vector())
-        APL = model.compute_APL(X_apl, ccp_alpha)
+        APL = model.compute_APL(data_train_loader.dataset[:][0].to(device), ccp_alpha)
         APLs_surrogate.append(APL)
         print(f'Random restart [{i + 1}/{num_random_restarts}]')
 
     for epoch in range(total_num_epochs):
         model.train()
-        batch_loss = []
+        batch_loss_train = []
+        batch_loss_val = []
         batch_loss_without_reg = []
+        batch_auc = []
 
         if epoch > (epochs_warm_up - 1):
 
@@ -217,14 +218,13 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
                 # lambda_ = lambda_target + (lambda_init - lambda_target) * ((epochs_reg - (epoch - epochs_warm_up)) / epochs_reg)
                 lambdas.append(lambda_)
 
-            input_surrogate_augmented, APLs_surrogate_augmented = augment_data_with_dirichlet(data_train_loader.dataset[:][0].to(device), input_surrogate, model, device, 200, ccp_alpha)
+            input_surrogate_augmented, APLs_surrogate_augmented = augment_data_with_dirichlet(data_train_loader.dataset[:][0].to(device), input_surrogate, model, device, 300, ccp_alpha)
             model.freeze_model()
             model.surrogate_network.unfreeze_model()
 
             input_surrogate_augmented = input_surrogate + input_surrogate_augmented
             APLs_surrogate_augmented = APLs_surrogate + APLs_surrogate_augmented
-            sr_train_loss = train_surrogate_model(input_surrogate_augmented, APLs_surrogate_augmented, criterion_sr,
-                                                  optimizer_sr, model)
+            sr_train_loss = train_surrogate_model(input_surrogate_augmented, APLs_surrogate_augmented, criterion_sr, optimizer_sr, model)
             surrogate_training_loss.append(sr_train_loss)
 
             print('Lambda: ', lambda_)
@@ -242,7 +242,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
         if epoch % 10 == 0:  # snapshots of the resulting tree
             model.eval()
             model.freeze_model()
-            snap_shot_train(data_train_loader, device, criterion, lambda_, model, epoch, path)
+            snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epoch, path)
             model.unfreeze_model()
             model.train()
 
@@ -253,8 +253,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             if surrogate_model_trained:
                 omega = model.compute_APL_prediction()
-                loss = criterion(input=y_hat, target=y_batch) + torch.tensor(lambda_, dtype=torch.float,
-                                                                             requires_grad=True) * omega
+                loss = criterion(input=y_hat, target=y_batch) + lambda_ * omega
             else:
                 loss = criterion(input=y_hat, target=y_batch)
 
@@ -262,13 +261,17 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
 
             batch_loss_without_reg.append(float(loss_without_reg))
             del loss_without_reg
-            APL_predictions.append(model.compute_APL_prediction())
+
+            if surrogate_model_trained:
+                APL_predictions.append(model.compute_APL_prediction())
+            else:
+                APL_predictions.append(0)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            batch_loss.append(float(loss))
+            batch_loss_train.append(float(loss))
 
             # Collect weights and APLs for surrogate training
             input_surrogate.append(model.parameters_to_vector())
@@ -279,34 +282,52 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
             del x_batch
             del y_batch
 
-        print(f'Epoch: [{epoch + 1}/{total_num_epochs}, Loss: {np.array(batch_loss).mean():.4f}]')
-        training_loss.append(np.array(batch_loss).mean())
+        # Validation
+        model.eval()
+        for i, batch in enumerate(data_val_loader):
+            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+            y_hat = model(x_batch)
+            loss = criterion(input=y_hat, target=y_batch)
+            batch_loss_val.append(float(loss))
+            batch_auc.append(roc_auc_score(y_batch.detach().cpu().numpy(), y_hat.detach().cpu().numpy()))
+
+        del x_batch
+        del y_batch
+
+        print(f'Epoch: [{epoch + 1}/{total_num_epochs}, Loss: {np.array(batch_loss_train).mean():.4f}]')
+        training_loss.append(np.array(batch_loss_train).mean())
+        val_loss.append(np.array(batch_loss_val).mean())
+        training_auc.append(np.array(batch_auc).mean())
         training_loss_without_reg.append(np.array(batch_loss_without_reg).mean())
 
     for i, _ in enumerate(surrogate_training_loss):
         for j, value in enumerate(surrogate_training_loss[i]):
             writer.add_scalar(f'Surrogate Training/Loss of surrogate training after epoch {i}', value, j)
 
+
+    # PLOTS
     surrogate_training_loss = torch.tensor(surrogate_training_loss).flatten()
 
-    fig, axs = plt.subplots(2, 2, figsize=(15, 10))
+    fig, axs = plt.subplots(2, 3, figsize=(20, 10))
     axs[0, 0].plot(range(0, len(training_loss)), training_loss)
     axs[0, 0].set_xlabel('epochs')
     axs[0, 0].set_ylabel('loss')
     axs[0, 0].grid()
-    axs[0, 0].set_title(f'Training loss, $\lambda$: {lambda_}, {regulariser}')
+    axs[0, 0].set_title(f'Training loss')
 
-    axs[0, 1].plot(range(0, len(training_loss_without_reg)), training_loss_without_reg)
+    axs[0, 1].plot(range(0, len(training_loss_without_reg)), training_loss_without_reg, label='Training loss')
+    axs[0, 1].plot(range(0, len(val_loss)), val_loss, label='Validation loss')
     axs[0, 1].set_xlabel('epochs')
     axs[0, 1].set_ylabel('loss')
+    axs[0, 1].legend()
     axs[0, 1].grid()
     axs[0, 1].set_title('Training loss without reg')
 
     axs[1, 0].plot(range(0, len(surrogate_training_loss)), surrogate_training_loss)
-    axs[1, 0].set_xlabel('training iterations')
+    axs[1, 0].set_xlabel('epochs')
     axs[1, 0].set_ylabel('loss')
     axs[1, 0].grid()
-    axs[1, 0].set_title(f'Surrogate Training Loss, $\lambda$: {lambda_}, {regulariser}')
+    axs[1, 0].set_title(f'Surrogate Training Loss')
 
     axs[1, 1].plot(range(0, len(APLs_truth)), APLs_truth, color='y', label='true APL')
     axs[1, 1].plot(range(0, len(APL_predictions)), APL_predictions, color='g', label='predicted APL')
@@ -314,7 +335,15 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     axs[1, 1].set_ylabel('node count')
     axs[1, 1].legend()
     axs[1, 1].grid()
-    axs[1, 1].set_title(f'Path length estimates, $\lambda$: {lambda_}, {regulariser}')
+    axs[1, 1].set_title(f'Path length estimates')
+
+    axs[0, 2].plot(range(0, len(training_auc)), training_auc, color='r')
+    axs[0, 2].set_xlabel('epochs')
+    axs[0, 2].set_ylabel('AUC')
+    axs[0, 2].grid()
+    axs[0, 2].set_title(f'AUC')
+
+    fig.delaxes(axs[1, 2])
 
     fig.tight_layout()
     fig.savefig(f'{path}/loss.png')
@@ -327,7 +356,7 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     plt.ylabel('node count')
     plt.legend()
     plt.grid()
-    plt.title(f'Path length estimates, $\lambda$: {lambda_}, {regulariser}')
+    plt.title(f'Path length estimates')
     plt.savefig(f'{path}/APL_prediction.png')
     plt.close(fig)
 
@@ -360,39 +389,34 @@ def train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path
     return model, criterion, device
 
 
-def init(path, tb_logs_path, strength, regulariser):
+def init(path, tb_logs_path, regulariser):
     global X_train
     global y_train
     global X_test
     global y_test
     global ccp_alpha
-    global space
 
-    num_samples, dim, space = 2000, 2, [[0, 1.5], [0, 1.5]]
     writer = SummaryWriter(log_dir=tb_logs_path)
-
-    fun = parabola # either use paraobla, polynom_6, or create a new one
-    fun_name = 'parabola'
-    if args.sample:
-        X, Y = sample_2D_data(num_samples, fun, space)
-        save_data(X, Y, f'feed_forward_network/dataset/{fun_name}/data_{fun_name}')
 
     train_data_from_txt = np.loadtxt(f'dataset/{fun_name}/data_{fun_name}_train.txt')
     test_data_from_txt = np.loadtxt(f'dataset/{fun_name}/data_{fun_name}_test.txt')
+    val_data_from_txt = np.loadtxt(f'dataset/{fun_name}/data_{fun_name}_val.txt')
 
     X_train, y_train = train_data_from_txt[:, :2], train_data_from_txt[:, 2]
     X_test, y_test = test_data_from_txt[:, :2], test_data_from_txt[:, 2]
+    X_val, y_val = val_data_from_txt[:, :2], val_data_from_txt[:, 2]
 
     # Decision tree directly on input space
     fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train, y_train, X_test, space,
                                                                      f"{path}/decision_tree")
-    acc_DT = accuracy_score(y_test, y_hat_tree)
-    writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT before reg: {acc_DT:.4f}')
-    writer.add_figure(f'Decision Trees/DT before regularisation, Accuracy: {acc_DT:.4f}', fig_DT)
-    writer.add_figure(f'Decision Trees/DT Contourplot before regularisation, Accuracy: {acc_DT:.4f}', fig_contour)
+
+    auc_DT = roc_auc_score(y_test, y_hat_tree)
+    writer.add_text('AUC/AUC of DT', f'AUC of DT before reg: {auc_DT:.4f}')
+    writer.add_figure(f'Decision Trees/DT before regularisation, AUC: {auc_DT:.4f}', fig_DT)
+    writer.add_figure(f'Decision Trees/DT Contourplot before regularisation, AUC: {auc_DT:.4f}', fig_contour)
     plt.close(fig_DT)
 
-    dt = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+    dt = DecisionTreeClassifier(random_state=42)
     dt.fit(X_train, y_train)
     plot_confusion_matrix(dt, X_test, y_test)
     plt.title("Confusion Matrix Tree")
@@ -423,14 +447,16 @@ def init(path, tb_logs_path, strength, regulariser):
     writer.add_text('Training Data Summary', data_summary)
 
     # Data preparation (to Tensor then create DataLoader for batch training)
-    data_train_loader, data_test_loader = get_data_loader(X_train, y_train, X_test, y_test, args.batch)
+    data_train_loader, data_test_loader, data_val_loader = get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, args.batch)
 
     ############# Training ######################
-    print('================Training===================')
-    model, criterion, device = train(data_train_loader, writer, ccp_alpha, regulariser, strength, dim, path, args)
+    #print('================Training===================')
+    print('Training'.center(len('Training') + 2).center(30, '='))
+    model, criterion, device = train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, dim, path, args)
 
     ############# Evaluation ######################
-    print('================Test=======================')
+    #print('================Test=======================')
+    print('Test'.center(len('Test') + 2).center(30, '='))
     model.eval()
     X_train_temp = []  # Because training data are shuffled, collect them for plotting afterwards
     y_train_temp = []
@@ -507,28 +533,27 @@ def init(path, tb_logs_path, strength, regulariser):
         plt.close(fig)
 
         y_train_predicted = [1 if y > 0.5 else 0 for y in y_train_predicted]
-        acc_NN_train = accuracy_score(y_train_temp, y_train_predicted)
+        auc_NN_train = roc_auc_score(y_train_temp, y_train_predicted)
         writer.add_text('Confusion Matrices/NN with Train data', data_summary)
-        writer.add_text('Accuracy/Accuracy of NN with Train data',
-                        f'Accuracy of NN with train data: {acc_NN_train:.4f}')
+        writer.add_text('AUC/AUC of NN with Train data', f'AUC of NN with train data: {auc_NN_train:.4f}')
 
         y_test_predicted = [1 if y > 0.5 else 0 for y in y_test_predicted]
-        acc_NN_test = accuracy_score(y_test, y_test_predicted)
+        auc_NN_test = roc_auc_score(y_test, y_test_predicted)
         writer.add_text('Confusion Matrices/NN with Test data', data_summary)
-        writer.add_text('Accuracy/Accuracy of NN with Test data', f'Accuracy of NN with test data: {acc_NN_test:.4f}')
+        writer.add_text('AUC/AUC of NN with Test data', f'AUC of NN with test data: {auc_NN_test:.4f}')
 
     # Decision tree after regularization
 
     fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train_temp,
                                                                          y_train_predicted, X_test, space,
                                                                          f"{path}/decision_tree_reg", ccp_alpha)
-    acc_DT_reg = accuracy_score(y_test, y_hat_tree)
-    writer.add_text('Accuracy/Accuracy of DT', f'Accuracy with DT after reg: {acc_DT_reg:.4f}')
-    writer.add_figure(f'Decision Trees/DT after regularisation, Accuracy: {acc_DT_reg:.4f}', fig_DT_reg)
-    writer.add_figure(f'Decision Trees/DT Contourplot after regularisation, Accuracy: {acc_DT_reg:.4f}', fig_contour)
+    auc_DT_reg = roc_auc_score(y_test, y_hat_tree)
+    writer.add_text('AUC/AUC of DT', f'AUC with DT after reg: {auc_DT_reg:.4f}')
+    writer.add_figure(f'Decision Trees/DT after regularisation, AUC: {auc_DT_reg:.4f}', fig_DT_reg)
+    writer.add_figure(f'Decision Trees/DT Contourplot after regularisation, AUC: {auc_DT_reg:.4f}', fig_contour)
     plt.close(fig_DT_reg)
 
-    dt = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+    dt = DecisionTreeClassifier(random_state=42)
     dt.fit(X_train_temp, y_train_predicted)
     plot_confusion_matrix(dt, X_test, y_test)
     plt.title("Confusion Matrix Tree regularized NN")
@@ -544,10 +569,10 @@ def init(path, tb_logs_path, strength, regulariser):
 
     # Final outputs
 
-    print(f'Accuracy of NN with training data: {acc_NN_train:.4f}')
-    print(f'Accuracy of NN with test data: {acc_NN_test:.4f}')
-    print(f'Accuracy of NN DT before regularisation with test data: {acc_DT:.4f}')
-    print(f'Accuracy of NN DT after regularisation with test data: {acc_DT_reg:.4f}')
+    print(f'AUC of NN with training data: {auc_NN_train:.4f}')
+    print(f'AUC of NN with test data: {auc_NN_test:.4f}')
+    print(f'AUC of NN DT before regularisation with test data: {auc_DT:.4f}')
+    print(f'AUC of NN DT after regularisation with test data: {auc_DT_reg:.4f}')
 
     writer.close()
     del model
@@ -555,10 +580,22 @@ def init(path, tb_logs_path, strength, regulariser):
 
 if __name__ == '__main__':
 
+    device = "cuda:0" if torch.cuda.is_available() else 'cpu'
+
     args = parser().parse_args()
+    num_samples = 2000
+    dim = 2
+    space = [[0, 1.5], [0, 1.5]]
+
+    fun = parabola  # either use paraobla, polynom_6, or create a new one
+    fun_name = 'parabola'
+
+    if args.sample:
+        X, Y = sample_2D_data(num_samples, fun, space)
+        save_data(X, Y, f'dataset/{fun_name}/data_{fun_name}')
+
     regulariser = 'tree_reg_train'
-    strength = args.lambda_init
-    dir_name = f'{regulariser}_{strength}_{args.label}'
+    dir_name = f'{regulariser}_{args.lambda_init}_{args.lambda_target}_{args.label}'
 
     fig_path = f'figures/{dir_name}'
     tb_logs_path = f'runs/{dir_name}'
@@ -569,4 +606,4 @@ if __name__ == '__main__':
     if not os.path.exists(tb_logs_path):
         os.makedirs(tb_logs_path)
 
-    init(fig_path, tb_logs_path, strength, regulariser)
+    init(fig_path, tb_logs_path, regulariser)
