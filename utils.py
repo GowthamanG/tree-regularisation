@@ -6,7 +6,8 @@ import torch
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, GridSearchCV, ParameterGrid
+from sklearn.metrics import make_scorer, accuracy_score
 from sklearn.tree import export_graphviz
 from six import StringIO
 from IPython.display import Image
@@ -16,38 +17,43 @@ import pydotplus
 np.random.seed(5555)
 torch.random.manual_seed(5255)
 
-def get_data_loader(X_train, y_train, X_test, y_test, batch_size, X_val=None, y_val=None):
+def get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, batch_size):
     X_train = torch.tensor(X_train, dtype=torch.float)
     y_train = torch.tensor(y_train.reshape(-1, 1), dtype=torch.float)
     X_test = torch.tensor(X_test, dtype=torch.float)
     y_test = torch.tensor(y_test.reshape(-1, 1), dtype=torch.float)
-    #X_val = torch.tensor(X_val, dtype=torch.float)
-    #y_val = torch.tensor(y_val.reshape(-1, 1), dtype=torch.float)
+    X_val = torch.tensor(X_val, dtype=torch.float)
+    y_val = torch.tensor(y_val.reshape(-1, 1), dtype=torch.float)
 
     data_train = TensorDataset(X_train, y_train)
     data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size, shuffle=True)
     data_test = TensorDataset(X_test, y_test)
     data_test_loader = DataLoader(dataset=data_test, batch_size=batch_size)
-    #data_val = TensorDataset(X_val, y_val)
-    #data_val_loader = DataLoader(dataset=data_val, batch_size=batch_size)
+    data_val = TensorDataset(X_val, y_val)
+    data_val_loader = DataLoader(dataset=data_val, batch_size=batch_size)
 
-    return data_train_loader, data_test_loader #, data_val_loader
+    return data_train_loader, data_test_loader, data_val_loader
 
 
 def save_data(X, Y, filename: str):
     file_data = open(filename + '.txt', 'w')
     file_train_data = open(filename + '_train.txt', 'w')
     file_test_data = open(filename + '_test.txt', 'w')
+    file_val_data = open(filename + '_val.txt', 'w')
 
+    # data split 70/15/15 ratio
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.33, random_state=42)
+    X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, test_size=0.5, random_state=42)
 
     np.savetxt(file_data, np.hstack((X, Y.reshape(-1, 1))))
     np.savetxt(file_train_data, np.hstack((X_train, y_train.reshape(-1, 1))))
     np.savetxt(file_test_data, np.hstack((X_test, y_test.reshape(-1, 1))))
+    np.savetxt(file_val_data, np.hstack((X_val, y_val.reshape(-1, 1))))
 
     file_data.close()
     file_train_data.close()
     file_test_data.close()
+    file_val_data.close()
 
 
 def colormap(Y):
@@ -65,7 +71,7 @@ def post_pruning(X, y):
     scores = []
     for ccp_alpha in ccp_alphas:
         clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
-        score = cross_val_score(clf, X, y, cv=5, scoring="neg_mean_squared_error", n_jobs=-1)
+        score = cross_val_score(clf, X, y, cv=3, scoring="neg_mean_squared_error", n_jobs=-1)
         scores.append(score)
 
     # average over folds, fix sign of mse
@@ -73,18 +79,36 @@ def post_pruning(X, y):
     # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
     # the minimum mse.
     # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
-    selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + 1.5 * np.std(fold_mse)]) # 0 - 0.5
+    #selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + np.std(fold_mse)])
+    selected_alpha = ccp_alphas[np.argmax(fold_mse)]
 
     return selected_alpha
+
+def post_pruning_2(X, y):
+    # https://towardsdatascience.com/build-better-decision-trees-with-pruning-8f467e73b107
+
+    full_tree = DecisionTreeClassifier(random_state=42)
+    ccp_alphas = full_tree.cost_complexity_pruning_path(X, y)['ccp_alphas']
+
+    ccp_alpha_grid_search = GridSearchCV(
+        estimator=DecisionTreeClassifier(random_state=42),
+        #scoring=make_scorer(accuracy_score),
+        param_grid={'ccp_alpha': [alpha for alpha in ccp_alphas[:-1]]}
+    )
+
+    ccp_alpha_grid_search.fit(X, y)
+
+    return ccp_alpha_grid_search.best_params_['ccp_alpha']
+
 
 def build_decision_tree(X, y, X_train, y_train, X_test, space, path, ccp_alpha=None):
 
     if ccp_alpha:
-        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha, random_state=42)
+        final_decision_tree = DecisionTreeClassifier(random_state=42)
         final_decision_tree.fit(X_train, y_train)
     else:
-        ccp_alpha = post_pruning(X_train, y_train)
-        final_decision_tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha, random_state=42)
+        ccp_alpha = post_pruning_2(X_train, y_train)
+        final_decision_tree = DecisionTreeClassifier(random_state=42)
         final_decision_tree.fit(X_train, y_train)
 
     y_hat_with_tree = final_decision_tree.predict(X_test)
@@ -117,7 +141,6 @@ def build_decision_tree(X, y, X_train, y_train, X_test, space, path, ccp_alpha=N
     plt.close(fig_contour)
 
     return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha
-
 
 def pred_contours(x, y, model):
     data = np.c_[x.ravel(), y.ravel()]
