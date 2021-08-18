@@ -79,13 +79,13 @@ class TreeNet(nn.Module):
         path_lengths = []
 
         for random_state in self.random_seeds:
-            tree = DecisionTreeClassifier(random_state=random_state, min_samples_leaf=15)
+            tree = DecisionTreeClassifier(random_state=random_state)
             y_tree = np.where(y_tree > 0.5, 1, 0)
             tree.fit(X_tree, y_tree)
 
             average_path_length = np.mean(np.sum(tree.tree_.decision_path(X_tree), axis=1))
             maximum_path_length = tree.get_depth()
-            path_lengths.append(maximum_path_length)
+            path_lengths.append(average_path_length)
 
             del tree
 
@@ -144,7 +144,7 @@ class TreeGRU(nn.Module):
     def __init__(self, input_size, hidden_size, num_classes, num_layers=1):
         super(TreeGRU, self).__init__()
 
-        self.gru = nn.GRU(input_size, hidden_size, num_layers, num_classes)
+        self.gru = nn.GRU(input_size, hidden_size, num_layers, num_classes, batch_first=True)
         self.classifier = nn.Linear(hidden_size, num_classes)
         self.softmax = nn.Softmax(dim=2)
 
@@ -185,8 +185,9 @@ class TreeGRU(nn.Module):
             y_tree = np.where(y_tree > 0.5, 1, 0)
             tree.fit(X_tree, y_tree)
 
-            path_length = np.max(np.sum(tree.tree_.decision_path(X_tree), axis=1))
-            path_lengths.append(tree.get_depth())
+            average_path_length = np.mean(np.sum(tree.tree_.decision_path(X_tree), axis=1))
+            maximum_path_length = tree.get_depth()
+            path_lengths.append(average_path_length)
 
             del tree
 
@@ -239,4 +240,3 @@ class TreeGRU(nn.Module):
 
     def vector_to_parameters(self, parameter_vector):
         vector_to_parameters(parameter_vector, self.gru.parameters())
-

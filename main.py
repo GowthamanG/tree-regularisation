@@ -3,17 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from torch import nn
-from torch.optim import Adam, SGD
+from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
-from datasets import sample_2D_data, parabola, polynom_6
+from datasets import parabola
 from sklearn.metrics import plot_confusion_matrix, roc_auc_score
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
 import networks
-from sklearn.preprocessing import StandardScaler
-from utils import save_data, get_data_loader, colormap, build_decision_tree, augment_data_with_gaussian, \
-    augment_data_with_dirichlet, pred_contours, post_pruning_2
-from sklearn.metrics import accuracy_score
+from utils import get_data_loader, colormap, build_decision_tree_2D, augment_data_with_dirichlet, pred_contours
 import argparse
 from PIL import Image as ImagePIL
 
@@ -27,7 +24,7 @@ def parser():
     parser.add_argument('--label',
                         required=False,
                         type=str,
-                        default='',
+                        default='train',
                         help='Label as postfix to the directory where all plots and tensorboard logs will be saved')
 
     parser.add_argument('--lambda_init',
@@ -39,30 +36,24 @@ def parser():
     parser.add_argument('--lambda_target',
                         required=False,
                         type=float,
-                        default=3,
+                        default=1,
                         help='Target lambda value as regularisation term')
 
     parser.add_argument('--ep',
                         required=False,
-                        default=300,
+                        default=450,
                         type=int,
                         help='Number of epochs, default 300 (150 warm up + 150 regularisation)')
 
     parser.add_argument('--batch',
-                        default=32,
+                        default=100,
                         required=False,
                         help='Batch size, default 32')
-
-    parser.add_argument('--sample',
-                        type=bool,
-                        required=False,
-                        default=False,
-                        help='Sample new data, default False')
 
     return parser
 
 
-def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epoch, path):
+def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, auc, epoch, path):
     y_train_predicted = []
     X_train_temp = []
     y_train_temp = []
@@ -83,13 +74,11 @@ def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epo
         y_train_predicted = torch.cat(y_train_predicted)
         y_train_predicted = torch.where(y_train_predicted > 0.5, 1, 0).detach().cpu().numpy()
 
-    _, _, _, _ = build_decision_tree(X_train, y_train, X_train_temp, y_train_predicted, X_test,
-                                     space, f"{path}/decision_tree-snapshot-epoch-{epoch}", ccp_alpha)
+    _, _, _, _ = build_decision_tree_2D(X_train_temp, y_train_predicted, X_test, space, f"{path}/decision_tree-snapshot-epoch-{epoch}", ccp_alpha)
 
     xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
     xx, yy = np.meshgrid(xx, yy)
-    Z = pred_contours(xx, yy, model)
-    Z = Z.reshape(xx.shape)
+    Z = pred_contours(xx, yy, model).reshape(xx.shape)
 
     fig = plt.figure()
     plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
@@ -97,10 +86,9 @@ def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epo
     # plt.colorbar()
     # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
     plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
-    #plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
     plt.xlim([space[0][0], space[0][1]])
     plt.ylim([space[1][0], space[1][1]])
-    plt.title(f'Network Contourplot with Training data, $\lambda$: {lambda_}')
+    plt.title(f'Network Contourplot, $\lambda$: {lambda_}, AUC: {auc}')
     # plt.plot(x_decision_fun, y_decision_fun, 'k-')
     fig.tight_layout()
     plt.savefig(f'{path}/fig_train_prediction-snapshot-epoch-{epoch}.png')
@@ -109,19 +97,13 @@ def snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epo
 
 def train_surrogate_model(X, y, criterion, optimizer, model):
 
-    X = torch.vstack(X)
-    y = torch.tensor([y], dtype=torch.float).T
-
-    X_train = X.cpu().detach().numpy()
-    y_train = y.numpy()
+    X_train = torch.vstack(X).detach()
+    y_train = torch.tensor([y], dtype=torch.float).T.to(device)
 
     model.surrogate_network.to(device)
 
     num_epochs = 10
-    batch_size = 32
-
-    X_train = torch.tensor(X_train, dtype=torch.float)
-    y_train = torch.tensor(y_train.reshape(-1, 1), dtype=torch.float)
+    batch_size = 64
 
     data_train = TensorDataset(X_train, y_train)
     data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size, shuffle=True)
@@ -133,20 +115,14 @@ def train_surrogate_model(X, y, criterion, optimizer, model):
     for epoch in range(num_epochs):
         batch_loss = []
 
-        for i, batch in enumerate(data_train_loader):
-            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
-
-            y_hat = model.surrogate_network(x_batch)
-            loss = criterion(input=y_hat, target=y_batch)
+        for (x, y) in data_train_loader:
+            y_hat = model.surrogate_network(x)
+            loss = criterion(input=y_hat, target=y)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            batch_loss.append(float(loss) / (np.var(y_train.cpu().detach().numpy()) + 0.01))
-            # batch_loss.append(loss.item())
-
-            del x_batch
-            del y_batch
+            batch_loss.append(loss.item() / (torch.var(y_train).item() + 0.01))
 
         training_loss.append(np.array(batch_loss).mean())
 
@@ -158,10 +134,12 @@ def train_surrogate_model(X, y, criterion, optimizer, model):
     return training_loss
 
 
-def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, dim, path, args):
+def train(data_train_loader, data_val_loader, writer, ccp_alpha, path):
 
     model = networks.TreeNet(input_dim=dim)
     model.to(device)
+
+    model_states_dict = []
 
     # Hypterparameters
     num_random_restarts = 25
@@ -173,12 +151,13 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
     lambda_ = lambda_init
 
     alpha = (lambda_target / lambda_init) ** (1 / epochs_reg)
+    cooling_fun = lambda k: lambda_target + (lambda_init - lambda_target) * (1 / (1 + np.exp(((-1300 * np.log((np.abs(lambda_init - lambda_target))) / epochs_reg) * (k - epochs_reg / 2)))))
 
     # Objectives and Optimizer
     criterion = nn.BCEWithLogitsLoss()
     optimizer = Adam(model.feed_forward.parameters(), lr=1e-4)
     criterion_sr = nn.MSELoss()
-    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3, weight_decay=1e-4)
+    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3, weight_decay=1e-5)
 
     input_surrogate = []
     APLs_surrogate = []
@@ -200,7 +179,7 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
     for i in range(num_random_restarts):
         model.reset_outer_weights()
         input_surrogate.append(model.parameters_to_vector())
-        APL = model.compute_APL(data_train_loader.dataset[:][0].to(device), ccp_alpha)
+        APL = model.compute_APL(data_train_loader.dataset[:][0], ccp_alpha)
         APLs_surrogate.append(APL)
         print(f'Random restart [{i + 1}/{num_random_restarts}]')
 
@@ -211,14 +190,16 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
         batch_loss_without_reg = []
         batch_auc = []
 
+
         if epoch > (epochs_warm_up - 1):
 
             if surrogate_model_trained:
-                lambda_ = lambda_init * (alpha ** (epoch - epochs_warm_up))
+                #lambda_ = lambda_init * (alpha ** (epoch - epochs_warm_up))
                 # lambda_ = lambda_target + (lambda_init - lambda_target) * ((epochs_reg - (epoch - epochs_warm_up)) / epochs_reg)
+                lambda_ = cooling_fun(epoch - epochs_warm_up)
                 lambdas.append(lambda_)
 
-            input_surrogate_augmented, APLs_surrogate_augmented = augment_data_with_dirichlet(data_train_loader.dataset[:][0].to(device), input_surrogate, model, device, 300, ccp_alpha)
+            input_surrogate_augmented, APLs_surrogate_augmented = augment_data_with_dirichlet(data_train_loader.dataset[:][0], input_surrogate, model, device, 300, ccp_alpha)
             model.freeze_model()
             model.surrogate_network.unfreeze_model()
 
@@ -239,25 +220,17 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
             del APLs_surrogate_augmented
             del sr_train_loss
 
-        if epoch % 10 == 0:  # snapshots of the resulting tree
-            model.eval()
-            model.freeze_model()
-            snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epoch, path)
-            model.unfreeze_model()
-            model.train()
+        for (x, y) in data_train_loader:
 
-        for i, batch in enumerate(data_train_loader):
-
-            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
-            y_hat = model(x_batch)
+            y_hat = model(x)
 
             if surrogate_model_trained:
                 omega = model.compute_APL_prediction()
-                loss = criterion(input=y_hat, target=y_batch) + lambda_ * omega
+                loss = criterion(input=y_hat, target=y) + lambda_ * omega
             else:
-                loss = criterion(input=y_hat, target=y_batch)
+                loss = criterion(input=y_hat, target=y)
 
-            loss_without_reg = criterion(input=y_hat, target=y_batch)  # Only for plotting purpose
+            loss_without_reg = criterion(input=y_hat, target=y)  # Only for plotting purpose
 
             batch_loss_without_reg.append(float(loss_without_reg))
             del loss_without_reg
@@ -271,34 +244,45 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
             loss.backward()
             optimizer.step()
 
-            batch_loss_train.append(float(loss))
+            batch_loss_train.append(loss.item())
 
             # Collect weights and APLs for surrogate training
             input_surrogate.append(model.parameters_to_vector())
-            APL = model.compute_APL(data_train_loader.dataset[:][0].to(device), ccp_alpha)
+            APL = model.compute_APL(data_train_loader.dataset[:][0], ccp_alpha)
             APLs_surrogate.append(APL)
             APLs_truth.append(APL)
 
-            del x_batch
-            del y_batch
+            del x, y
+
+        if epoch % 10 == 0:  # snapshots of the resulting tree
+            torch.save(model.state_dict(), f'models/model_snapshot_{epoch}.pth')
+            model.eval()
+            model.freeze_model()
+            snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, training_auc[-1], epoch, path)
+            model.unfreeze_model()
+            model.train()
 
         # Validation
         model.eval()
-        for i, batch in enumerate(data_val_loader):
-            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
-            y_hat = model(x_batch)
-            loss = criterion(input=y_hat, target=y_batch)
+        for (x, y) in data_val_loader:
+            y_hat = model(x)
+            loss = criterion(input=y_hat, target=y)
             batch_loss_val.append(float(loss))
-            batch_auc.append(roc_auc_score(y_batch.detach().cpu().numpy(), y_hat.detach().cpu().numpy()))
+            batch_auc.append(roc_auc_score(y.detach().cpu().numpy(), y_hat.detach().cpu().numpy()))
 
-        del x_batch
-        del y_batch
+            del x, y
 
         print(f'Epoch: [{epoch + 1}/{total_num_epochs}, Loss: {np.array(batch_loss_train).mean():.4f}]')
         training_loss.append(np.array(batch_loss_train).mean())
         val_loss.append(np.array(batch_loss_val).mean())
         training_auc.append(np.array(batch_auc).mean())
         training_loss_without_reg.append(np.array(batch_loss_without_reg).mean())
+
+        for (epoch, lambda_, model_state) in model_states_dict:
+            model = networks.TreeNet(input_dim=dim)
+            model.load_state_dict(model_state)
+            model.eval()
+            snap_shot_train(data_train_loader, criterion, lambda_, ccp_alpha, model, epoch, path)
 
     for i, _ in enumerate(surrogate_training_loss):
         for j, value in enumerate(surrogate_training_loss[i]):
@@ -330,7 +314,7 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
     axs[1, 0].set_title(f'Surrogate Training Loss')
 
     axs[1, 1].plot(range(0, len(APLs_truth)), APLs_truth, color='y', label='true APL')
-    axs[1, 1].plot(range(0, len(APL_predictions)), APL_predictions, color='g', label='predicted APL')
+    axs[1, 1].plot(range(0, len(APL_predictions)), APL_predictions, color='g', label='predicted APL $\hat{\Omega}(W)$')
     axs[1, 1].set_xlabel('iterations')
     axs[1, 1].set_ylabel('node count')
     axs[1, 1].legend()
@@ -365,7 +349,7 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
     plt.xlabel('epochs')
     plt.ylabel('lambda')
     plt.grid()
-    plt.title(f'Lambdas, {regulariser}')
+    plt.title(f'Lambda curve')
     plt.savefig(f'{path}/lambdas.png')
     plt.close(fig)
 
@@ -376,20 +360,20 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, di
         writer.add_scalar(f'Training Loss without Regularisation', value, i)
 
     for i, value in enumerate(APL_predictions):
-        writer.add_scalar(f'APL Predictions: {regulariser}', value, i)
+        writer.add_scalar(f'APL Predictions', value, i)
 
     for i, value in enumerate(surrogate_training_loss):
-        writer.add_scalar(f'Surrogate Training Loss: {regulariser}', value, i)
+        writer.add_scalar(f'Surrogate Training Loss', value, i)
 
     del input_surrogate
     del APLs_surrogate
     del criterion_sr
     del optimizer_sr
 
-    return model, criterion, device
+    return model, criterion
 
 
-def init(path, tb_logs_path, regulariser):
+def init(path, tb_logs_path):
     global X_train
     global y_train
     global X_test
@@ -407,14 +391,14 @@ def init(path, tb_logs_path, regulariser):
     X_val, y_val = val_data_from_txt[:, :2], val_data_from_txt[:, 2]
 
     # Decision tree directly on input space
-    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train, y_train, X_test, space,
-                                                                     f"{path}/decision_tree")
+    fig_DT, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree_2D(X_train, y_train, X_test, space, f"{path}/decision_tree")
 
     auc_DT = roc_auc_score(y_test, y_hat_tree)
     writer.add_text('AUC/AUC of DT', f'AUC of DT before reg: {auc_DT:.4f}')
     writer.add_figure(f'Decision Trees/DT before regularisation, AUC: {auc_DT:.4f}', fig_DT)
     writer.add_figure(f'Decision Trees/DT Contourplot before regularisation, AUC: {auc_DT:.4f}', fig_contour)
     plt.close(fig_DT)
+    plt.close(fig_contour)
 
     dt = DecisionTreeClassifier(random_state=42)
     dt.fit(X_train, y_train)
@@ -440,7 +424,7 @@ def init(path, tb_logs_path, regulariser):
     plt.plot(x_decision_fun, y_decision_fun, 'k-')
     plt.savefig(f'{path}/samples_training_plot.png')
 
-    # plt.show()
+    #plt.show()
     writer.add_figure('Training samples', figure=fig)
     plt.close(fig)
     data_summary = f'Samples: {num_samples}  \nTraining data shape: {X_train.shape}  \nTest data shape: {X_test.shape}'
@@ -450,12 +434,10 @@ def init(path, tb_logs_path, regulariser):
     data_train_loader, data_test_loader, data_val_loader = get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, args.batch)
 
     ############# Training ######################
-    #print('================Training===================')
     print('Training'.center(len('Training') + 2).center(30, '='))
-    model, criterion, device = train(data_train_loader, data_val_loader, writer, ccp_alpha, regulariser, dim, path, args)
+    model, criterion = train(data_train_loader, data_val_loader, writer, ccp_alpha, path)
 
-    ############# Evaluation ######################
-    #print('================Test=======================')
+    ############# Evaluation #####################
     print('Test'.center(len('Test') + 2).center(30, '='))
     model.eval()
     X_train_temp = []  # Because training data are shuffled, collect them for plotting afterwards
@@ -480,7 +462,7 @@ def init(path, tb_logs_path, regulariser):
         X_train_temp = torch.cat(X_train_temp).cpu().numpy()
         y_train_temp = torch.cat(y_train_temp).cpu().numpy()
         y_train_predicted = torch.cat(y_train_predicted)
-        y_train_predicted = torch.where(y_train_predicted > 0.5, 1, 0)
+        y_train_predicted = torch.where(y_train_predicted > 0.5, 1, 0).cpu().numpy()
 
         # Test with test data
         for i, batch in enumerate(data_test_loader):
@@ -491,14 +473,13 @@ def init(path, tb_logs_path, regulariser):
             loss_with_test_data.append(loss.item())
 
         y_test_predicted = torch.cat(y_test_predicted)
-        y_test_predicted = torch.where(y_test_predicted > 0.5, 1, 0)
+        y_test_predicted = torch.where(y_test_predicted > 0.5, 1, 0).cpu().numpy()
 
         ## PLOTS ##
 
         xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
         xx, yy = np.meshgrid(xx, yy)
-        Z = pred_contours(xx, yy, model)
-        Z = Z.reshape(xx.shape)
+        Z = pred_contours(xx, yy, model).reshape(xx.shape)
 
         # Contourplot with predicted training data
         fig = plt.figure()
@@ -507,7 +488,6 @@ def init(path, tb_logs_path, regulariser):
         # plt.colorbar()
         # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
         plt.scatter(*X_train_temp.T, c=colormap(y_train_predicted), edgecolors='k')
-        #plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
         plt.xlim([space[0][0], space[0][1]])
         plt.ylim([space[1][0], space[1][1]])
         plt.title('Network Contourplot with Training data')
@@ -522,31 +502,25 @@ def init(path, tb_logs_path, regulariser):
         fig = plt.figure()
         plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
         CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-        plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test_predicted), edgecolors='k')
-        #plt.scatter(*data_test_loader.dataset[:][0].T, c=colormap(y_test), edgecolors='k')
+        plt.scatter(*X_test.T, c=colormap(y_test_predicted), edgecolors='k')
         plt.title('Network Contourplot with Test data')
         plt.xlim([space[0][0], space[0][1]])
         plt.ylim([space[1][0], space[1][1]])
         plt.savefig(f'{path}/fig_test_prediction.png')
-        writer.add_figure(f'Inference/Inference with test data, loss {np.array(loss_with_test_data).mean()}',
-                          figure=fig)
+        writer.add_figure(f'Inference/Inference with test data, loss {np.array(loss_with_test_data).mean()}', figure=fig)
         plt.close(fig)
 
-        y_train_predicted = [1 if y > 0.5 else 0 for y in y_train_predicted]
         auc_NN_train = roc_auc_score(y_train_temp, y_train_predicted)
         writer.add_text('Confusion Matrices/NN with Train data', data_summary)
         writer.add_text('AUC/AUC of NN with Train data', f'AUC of NN with train data: {auc_NN_train:.4f}')
 
-        y_test_predicted = [1 if y > 0.5 else 0 for y in y_test_predicted]
         auc_NN_test = roc_auc_score(y_test, y_test_predicted)
         writer.add_text('Confusion Matrices/NN with Test data', data_summary)
         writer.add_text('AUC/AUC of NN with Test data', f'AUC of NN with test data: {auc_NN_test:.4f}')
 
     # Decision tree after regularization
 
-    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree(X_train, y_train, X_train_temp,
-                                                                         y_train_predicted, X_test, space,
-                                                                         f"{path}/decision_tree_reg", ccp_alpha)
+    fig_DT_reg, fig_contour, y_hat_tree, ccp_alpha = build_decision_tree_2D(X_train_temp, y_train_predicted, X_test, space, f"{path}/decision_tree_reg", ccp_alpha)
     auc_DT_reg = roc_auc_score(y_test, y_hat_tree)
     writer.add_text('AUC/AUC of DT', f'AUC with DT after reg: {auc_DT_reg:.4f}')
     writer.add_figure(f'Decision Trees/DT after regularisation, AUC: {auc_DT_reg:.4f}', fig_DT_reg)
@@ -587,15 +561,10 @@ if __name__ == '__main__':
     dim = 2
     space = [[0, 1.5], [0, 1.5]]
 
-    fun = parabola  # either use paraobla, polynom_6, or create a new one
+    fun = parabola
     fun_name = 'parabola'
 
-    if args.sample:
-        X, Y = sample_2D_data(num_samples, fun, space)
-        save_data(X, Y, f'dataset/{fun_name}/data_{fun_name}')
-
-    regulariser = 'tree_reg_train'
-    dir_name = f'{regulariser}_{args.lambda_init}_{args.lambda_target}_{args.label}'
+    dir_name = f'tree_reg_train_{args.lambda_init}_{args.lambda_target}_{args.label}'
 
     fig_path = f'figures/{dir_name}'
     tb_logs_path = f'runs/{dir_name}'
@@ -606,4 +575,4 @@ if __name__ == '__main__':
     if not os.path.exists(tb_logs_path):
         os.makedirs(tb_logs_path)
 
-    init(fig_path, tb_logs_path, regulariser)
+    init(fig_path, tb_logs_path)
