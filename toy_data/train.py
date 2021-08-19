@@ -431,7 +431,7 @@ def init(path, tb_logs_path):
     writer.add_text('Training Data Summary', data_summary)
 
     # Data preparation (to Tensor then create DataLoader for batch training)
-    data_train_loader, data_test_loader, data_val_loader = get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, args.batch)
+    data_train_loader, data_test_loader, data_val_loader = get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, torch.float, torch.float, args.batch)
 
     ############# Training ######################
     print('Training'.center(len('Training') + 2).center(30, '='))
