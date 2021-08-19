@@ -254,7 +254,7 @@ def train(data_train_loader, data_val_loader, writer, ccp_alpha, path):
 
             del x, y
 
-        if epoch % 10 == 0:  # snapshots of the resulting tree
+        if epoch > 0 and epoch % 10 == 0:  # snapshots of the resulting tree
             torch.save(model.state_dict(), f'models/model_snapshot_{epoch}.pth')
             model.eval()
             model.freeze_model()

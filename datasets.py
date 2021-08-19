@@ -36,14 +36,16 @@ def save_data(X, y, filename: str):
     file_test_data = open(filename + '_test.txt', 'w')
     file_val_data = open(filename + '_val.txt', 'w')
 
+    y = y.reshape(-1, 1)
+
     # data split 70/15/15 ratio
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
     X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, test_size=0.5, random_state=42)
 
-    np.savetxt(file_data, np.hstack((X, Y.reshape(-1, 1))))
-    np.savetxt(file_train_data, np.hstack((X_train, y_train.reshape(-1, 1))))
-    np.savetxt(file_test_data, np.hstack((X_test, y_test.reshape(-1, 1))))
-    np.savetxt(file_val_data, np.hstack((X_val, y_val.reshape(-1, 1))))
+    np.savetxt(file_data, np.hstack((X, y)))
+    np.savetxt(file_train_data, np.hstack((X_train, y_train)))
+    np.savetxt(file_test_data, np.hstack((X_test, y_test)))
+    np.savetxt(file_val_data, np.hstack((X_val, y_val)))
 
     file_data.close()
     file_train_data.close()
@@ -203,27 +205,30 @@ if __name__ == '__main__':
         space = [[0, 1.5], [0, 1.5]]
         fun_name = 'parabola'
         X, Y = sample_2D_data(num_samples, parabola, space)
-        save_data(X, Y, f'{args.path}/{fun_name}/data_{fun_name}')
+        save_data(X, Y, f'{args.path}/data_{fun_name}')
 
     elif args.sample == 'polynom_6':
         dim = 2
         space = [[-3, 3], [-3, 3]]
         fun_name = 'polynom_6'
         X, Y = sample_2D_data(num_samples, polynom_6, space)
-        save_data(X, Y, f'{args.path}/{fun_name}/data_{fun_name}')
+        save_data(X, Y, f'{args.path}/data_{fun_name}')
 
     elif args.sample == 'breast_cancer':
-        data = load_breast_cancer()
-        num_samples = data.data.shape[0]
-        dim = data.data.shape[1]
-        save_data(data.data, data.target, f'{args.path}/{args.sample}/data_{args.sample}')
-
-    elif args.sample == 'signal_noise_hmm':
-        time_count = 50
-        path = f'{args.path}/{args.sample}'
-        X, y = gen_synthetic_dataset(num_samples, time_count)
-
+        path = f'{args.path}'
         if not os.path.exists(path):
             os.makedirs(path)
 
-        save_data(X, y, f'{args.path}/{args.sample}/data_{args.sample}')
+        data = load_breast_cancer()
+        num_samples = data.data.shape[0]
+        dim = data.data.shape[1]
+        save_data(data.data, data.target, f'{args.path}/data_{args.sample}')
+
+    elif args.sample == 'signal_noise_hmm':
+        path = f'{args.path}'
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        time_count = 50
+        X, y = gen_synthetic_dataset(num_samples, time_count)
+        save_data(X, y, f'{args.path}/data_{args.sample}')
