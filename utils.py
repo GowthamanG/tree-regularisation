@@ -19,11 +19,18 @@ device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
 def get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, X_type, y_type, batch_size):
     X_train = torch.tensor(X_train, dtype=X_type).to(device)
-    y_train = torch.tensor(y_train.reshape(-1, 1), dtype=y_type).to(device)
     X_test = torch.tensor(X_test, dtype=X_type).to(device)
-    y_test = torch.tensor(y_test.reshape(-1, 1), dtype=y_type).to(device)
     X_val = torch.tensor(X_val, dtype=X_type).to(device)
-    y_val = torch.tensor(y_val.reshape(-1, 1), dtype=y_type).to(device)
+
+
+    if len(y_train.shape) == 2:
+        y_train = torch.tensor(y_train.reshape(-1, 1), dtype=y_type).to(device)
+        y_test = torch.tensor(y_test.reshape(-1, 1), dtype=y_type).to(device)
+        y_val = torch.tensor(y_val.reshape(-1, 1), dtype=y_type).to(device)
+    else:
+        y_train = torch.tensor(y_train, dtype=y_type).to(device)
+        y_test = torch.tensor(y_test, dtype=y_type).to(device)
+        y_val = torch.tensor(y_val, dtype=y_type).to(device)
 
     data_train = TensorDataset(X_train, y_train)
     data_train_loader = DataLoader(dataset=data_train, batch_size=batch_size, shuffle=True)
