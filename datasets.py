@@ -1,11 +1,12 @@
 import argparse
 import numpy as np
 import torch
-import os
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.datasets import load_breast_cancer
+from utils import *
 
 np.random.seed(5555)
+
 
 def parser():
     parser = argparse.ArgumentParser()
@@ -13,7 +14,7 @@ def parser():
     parser.add_argument('--sample',
                         required=True,
                         type=str,
-                        help='Type in which data set to sample. Availables: parabola, polynom_6, breast_cancer, signal_noise_hmm')
+                        help='Available functions to sample from: parabola, cos')
 
     parser.add_argument('--sample_size',
                         required=False,
@@ -24,9 +25,40 @@ def parser():
     parser.add_argument('--path',
                         required=True,
                         type=str,
-                        help='Directory where the data should be stored.')
+                        help='Directory, where the data should be stored.')
 
     return parser
+
+
+def plot(X, y, fun, error, space):
+
+    x_lower = lambda x: fun(x) - error
+    x_upper = lambda x: fun(x) + error
+
+    x_decision_fun = np.linspace(space[0][0], space[0][1], 100)
+    y_decision_fun = fun(x_decision_fun)
+
+    fig = plt.figure()
+    plt.scatter(*X.T, c=colormap(y), edgecolors='k')
+    plt.xlim([space[0][0], space[0][1]])
+    plt.ylim([space[1][0], space[1][1]])
+    plt.title('Samples')
+    plt.plot(x_decision_fun, y_decision_fun, 'k-')
+    plt.plot(x_decision_fun, x_lower(x_decision_fun), color='#808080')
+    plt.plot(x_decision_fun, x_upper(x_decision_fun), color='#808080')
+    plt.show()
+    plt.close(fig)
+
+    fig = plt.figure()
+    plt.xlim([space[0][0], space[0][1]])
+    plt.ylim([space[1][0], space[1][1]])
+    plt.title('Samples')
+    plt.plot(x_decision_fun, y_decision_fun, 'k-')
+    plt.plot(x_decision_fun, x_lower(x_decision_fun), color='#808080')
+    plt.plot(x_decision_fun, x_upper(x_decision_fun), color='#808080')
+    plt.fill_between(x_decision_fun, x_lower(x_decision_fun), x_upper(x_decision_fun))
+    plt.show()
+    plt.close(fig)
 
 
 def save_data(X, y, filename: str):
@@ -57,141 +89,22 @@ def parabola(x):
     return 5 * (x - 0.75) ** 2 + 0.4
 
 
-def polynom_3(x):
-    return 2 * x ** 3 - 4.8 * x ** 2 + 2.9 * x + 0.2
+def cos(x):
+    return np.cos(x)
 
 
-def polynom_6(x):
-    return -0.21 * x ** 6 + 0.01 * x ** 5 + 1.96 * x ** 4 - 0.17 * x ** 3 - 4.54 * x ** 2 + 0.63 * x + 2.15
-
-
-def sample_2D_data(num_samples, fun, space):
-
+def sample_2D_data(num_samples, fun, error, space):
     samples = np.random.uniform(low=space[0][0], high=space[0][1], size=(num_samples, 2))
-    labels = np.zeros(num_samples) # one-hot encoded
+    labels = np.where(samples[:, 1] > fun(samples[:, 0]), 1, 0)
 
-    for i in range(num_samples):
-        x, y = samples[i, 0], samples[i, 1]
-        if np.abs(y > fun(x)):
-            labels[i] = 1
+    fun_lower = lambda x: fun(x) - error
+    fun_upper = lambda x: fun(x) + error
 
-        if y > fun(x) and (y < fun(x - 0.125) or y < fun(x + 0.125)):
-            labels[i] = np.random.binomial(n=1, p=0.8)
+    for i, (x, y) in enumerate(samples):
+        if fun_lower(x) <= y <= fun_upper(x):
+            labels[i] = np.random.binomial(n=1, p=0.5)
 
-        if y < fun(x) and (y > fun(x - 0.125) or y > fun(x + 0.125)):
-            labels[i] = np.random.binomial(n=1, p=0.2)
-
-    return samples, labels.reshape(-1, 1)
-
-# def sample_2D_data_2(num_samples):
-#     fun = lambda x: 5 * (x - 0.5) ** 2 + 0.4
-#     fun_lower = lambda x: 5 * (x - 0.5) ** 2 + 0.2
-#     fun_upper = lambda x: 5 * (x - 0.5) ** 2 + 0.6
-#
-#     # vertical_dist_from_fun = lambda x, y: np.abs(y - fun(x))
-#     class_ = lambda x, y: np.sign(fun(x) - y)
-#
-#     X = np.random.rand(num_samples, 2)
-#     flip_prob = lambda x, y: (fun_lower(x) < y) * (y < fun_upper(x)) * 0.2
-#     do_flip = -np.random.binomial(n=1, p=flip_prob(*X.T)) * 2 + 1
-#     Y = class_(*X.T) * do_flip
-#     Y = np.where(Y == 1., Y, 0)
-#
-#     return X, Y
-
-
-def gen_synthetic_dataset(data_count, time_count):
-    """Signal-and-Noise HMM dataset
-    Obtained from https://github.com/dtak/tree-regularization-public
-    The generative process comes from two separate HMM processes. First,
-    a "signal" HMM generates the first 7 data dimensions from 5 well-separated states.
-    Second, an independent "noise" HMM generates the remaining 7 data dimensions
-    from a different set of 5 states. Each timestep's output label is produced by a
-    rule involving both the signal data and the signal hidden state.
-    @param data_count: number of sequences in dataset
-    @param time_count: number of timesteps in a sequence
-    @return obs_set: Torch Tensor data_count x time_count x 14
-    @return out_set: Torch Tensor data_count x time_count x 1
-    """
-
-    bias_mat = np.array([15])
-    # 5 states + 7 observations
-    weight_mat = np.array([[10, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0]])
-
-    state_count = 5
-    dim_count = 7
-    out_count = 1
-
-    # signal HMM process
-    pi_mat_signal = np.array([.5, .5, 0, 0, 0])
-    trans_mat_signal = np.array(([.7, .3, 0, 0, 0],
-                                 [.5, .25, .25, 0, 0],
-                                 [0, .25, .5, .25, 0],
-                                 [0, 0, .25, .25, .5],
-                                 [0, 0, 0, .5, .5]))
-    obs_mat_signal = np.array(([.5, .5, .5, .5, 0, 0, 0],
-                               [.5, .5, .5, .5, .5, 0, 0],
-                               [.5, .5, .5, 0, .5, 0, 0],
-                               [.5, .5, .5, 0, 0, .5, 0],
-                               [.5, .5, .5, 0, 0, 0, .5]))
-
-    # noise HMM process
-    pi_mat_noise = np.array([.2, .2, .2, .2, .2])
-    trans_mat_noise = np.array(([.2, .2, .2, .2, .2],
-                                [.2, .2, .2, .2, .2],
-                                [.2, .2, .2, .2, .2],
-                                [.2, .2, .2, .2, .2],
-                                [.2, .2, .2, .2, .2]))
-    obs_mat_noise = np.array(([.5, .5, .5, 0, 0, 0, 0],
-                              [0, .5, .5, .5, 0, 0, 0],
-                              [0, 0, .5, .5, .5, 0, 0],
-                              [0, 0, 0, .5, .5, .5, 0],
-                              [0, 0, 0, 0, .5, .5, .5]))
-
-    # create the sequences
-    obs_set = np.zeros((dim_count * 2, time_count, data_count))
-    out_set = np.zeros((out_count, time_count, data_count))
-
-    state_set_signal = np.zeros((state_count, time_count, data_count))
-    state_set_noise = np.zeros((state_count, time_count, data_count))
-
-    # loop through to sample HMM states
-    for data_ix in range(data_count):
-        for time_ix in range(time_count):
-            if time_ix == 0:
-                state_signal = np.random.multinomial(1, pi_mat_signal)
-                state_noise = np.random.multinomial(1, pi_mat_noise)
-                state_set_signal[:, 0, data_ix] = state_signal
-                state_set_noise[:, 0, data_ix] = state_noise
-            else:
-                tvec_signal = np.dot(state_set_signal[:, time_ix - 1, data_ix], trans_mat_signal)
-                tvec_noise = np.dot(state_set_noise[:, time_ix - 1, data_ix], trans_mat_noise)
-                state_signal = np.random.multinomial(1, tvec_signal)
-                state_noise = np.random.multinomial(1, tvec_noise)
-                state_set_signal[:, time_ix, data_ix] = state_signal
-                state_set_noise[:, time_ix, data_ix] = state_noise
-
-    # loop through to generate observations and outputs
-    for data_ix in range(data_count):
-        for time_ix in range(time_count):
-            obs_vec_signal = np.dot(state_set_signal[:, time_ix, data_ix], obs_mat_signal)
-            obs_vec_noise = np.dot(state_set_noise[:, time_ix, data_ix], obs_mat_noise)
-            obs_signal = np.random.binomial(1, obs_vec_signal)
-            obs_noise = np.random.binomial(1, obs_vec_noise)
-            obs = np.hstack((obs_signal, obs_noise))  # concat together
-            obs_set[:, time_ix, data_ix] = obs
-
-            # input is state concatenated with observation
-            in_vec = np.hstack((state_set_signal[:, time_ix, data_ix],
-                                obs_set[:dim_count, time_ix, data_ix]))
-
-            # output is a logistic regression on W \dot input
-            out_vec = 1 / (1 + np.exp(-1 * (np.dot(weight_mat, in_vec) - bias_mat)))
-
-            out = np.random.binomial(1, out_vec)
-            out_set[:, time_ix, data_ix] = out
-
-    return obs_set.T, out_set.T
+    return samples, labels
 
 
 if __name__ == '__main__':
@@ -204,31 +117,14 @@ if __name__ == '__main__':
         dim = 2
         space = [[0, 1.5], [0, 1.5]]
         fun_name = 'parabola'
-        X, Y = sample_2D_data(num_samples, parabola, space)
+        X, Y = sample_2D_data(num_samples, parabola, 0.2, space)
+        plot(X, Y, parabola, 0.2, space)
         save_data(X, Y, f'{args.path}/data_{fun_name}')
 
-    elif args.sample == 'polynom_6':
+    elif args.sample == 'cos':
         dim = 2
-        space = [[-3, 3], [-3, 3]]
-        fun_name = 'polynom_6'
-        X, Y = sample_2D_data(num_samples, polynom_6, space)
+        space = [[-6, 6], [-2, 2]]
+        fun_name = 'cos'
+        X, Y = sample_2D_data(num_samples, cos, 0.4, space)
+        plot(X, Y, cos, 0.4, space)
         save_data(X, Y, f'{args.path}/data_{fun_name}')
-
-    elif args.sample == 'breast_cancer':
-        path = f'{args.path}'
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        data = load_breast_cancer()
-        num_samples = data.data.shape[0]
-        dim = data.data.shape[1]
-        save_data(data.data, data.target, f'{args.path}/data_{args.sample}')
-
-    elif args.sample == 'signal_noise_hmm':
-        path = f'{args.path}'
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        time_count = 50
-        X, y = gen_synthetic_dataset(num_samples, time_count)
-        save_data(X, y, f'{args.path}/data_{args.sample}')

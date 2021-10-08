@@ -3,7 +3,8 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import plot_confusion_matrix, accuracy_score, roc_auc_score
+from dtreeviz.trees import *
 from sklearn.tree import DecisionTreeClassifier
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import cross_val_score, GridSearchCV, ParameterGrid
@@ -17,13 +18,14 @@ import pydotplus
 np.random.seed(5555)
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
+
 def get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, X_type, y_type, batch_size):
     X_train = torch.tensor(X_train, dtype=X_type).to(device)
     X_test = torch.tensor(X_test, dtype=X_type).to(device)
     X_val = torch.tensor(X_val, dtype=X_type).to(device)
 
 
-    if len(y_train.shape) == 2:
+    if len(y_train.shape) <= 2:
         y_train = torch.tensor(y_train.reshape(-1, 1), dtype=y_type).to(device)
         y_test = torch.tensor(y_test.reshape(-1, 1), dtype=y_type).to(device)
         y_val = torch.tensor(y_val.reshape(-1, 1), dtype=y_type).to(device)
@@ -42,6 +44,13 @@ def get_data_loader(X_train, y_train, X_test, y_test, X_val, y_val, X_type, y_ty
     return data_train_loader, data_test_loader, data_val_loader
 
 
+def dataloader_to_numpy(dataloader):
+    X = dataloader.dataset[:][0].detach().cpu().numpy()
+    y = dataloader.dataset[:][1].detach().cpu().numpy()
+
+    return X, y
+
+
 def colormap(Y):
     return ['b' if y == 1 else 'r' for y in Y]
 
@@ -55,26 +64,29 @@ def post_pruning(X, y):
     ccp_alphas, impurities = path.ccp_alphas, path.impurities
     ccp_alphas = ccp_alphas[:-1]
     scores = []
-    for ccp_alpha in ccp_alphas:
-        clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
-        score = cross_val_score(clf, X, y, cv=3, scoring="neg_mean_squared_error", n_jobs=-1)
-        scores.append(score)
+    if len(ccp_alphas) != 0:
+        for ccp_alpha in ccp_alphas:
+            clf = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
+            score = cross_val_score(clf, X, y, cv=5, scoring="neg_mean_squared_error", n_jobs=-1)
+            scores.append(score)
 
-    # average over folds, fix sign of mse
-    fold_mse = -np.mean(scores, 1)
-    # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
-    # the minimum mse.
-    # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
-    #selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + np.std(fold_mse)])
-    selected_alpha = ccp_alphas[np.argmax(fold_mse)]
+        # average over folds, fix sign of mse
+        fold_mse = -np.mean(scores, 1)
+        # select the most parsimonous model (highest ccp_alpha) that has an error within one standard deviation of
+        # the minimum mse.
+        # I.e. the “one-standard-error” rule (see ESL or a lot of other tibshirani / hastie notes on regularization)
+        selected_alpha = np.max(ccp_alphas[fold_mse <= np.min(fold_mse) + np.std(fold_mse)])
 
-    return selected_alpha
+        return selected_alpha
+
+    else:
+        return 0.0
 
 def post_pruning_2(X, y):
     # https://towardsdatascience.com/build-better-decision-trees-with-pruning-8f467e73b107
 
-    full_tree = DecisionTreeClassifier(random_state=42)
-    ccp_alphas = full_tree.cost_complexity_pruning_path(X, y)['ccp_alphas']
+    clf = DecisionTreeClassifier(random_state=42)
+    ccp_alphas = clf.cost_complexity_pruning_path(X, y).get('ccp_alphas')
 
     ccp_alpha_grid_search = GridSearchCV(
         estimator=DecisionTreeClassifier(random_state=42),
@@ -83,24 +95,21 @@ def post_pruning_2(X, y):
 
     ccp_alpha_grid_search.fit(X, y)
 
-    return ccp_alpha_grid_search.best_params_['ccp_alpha']
+    return ccp_alpha_grid_search.best_params_['ccp_alphas']
 
 
-def build_decision_tree_2D(X_train, y_train, X_test, space, path, ccp_alpha=None):
+def build_decision_tree(X_train, y_train, X_test, y_test, space, path, epoch=0, contour_plot=True, min_samples_leaf=1):
 
-    if ccp_alpha:
-        final_decision_tree = DecisionTreeClassifier(random_state=42)
-        final_decision_tree.fit(X_train, y_train)
-    else:
-        ccp_alpha = post_pruning_2(X_train, y_train)
-        final_decision_tree = DecisionTreeClassifier(random_state=42)
-        final_decision_tree.fit(X_train, y_train)
+    ccp_alpha = post_pruning(X_train, y_train)
+    clf = DecisionTreeClassifier(random_state=42, ccp_alpha=ccp_alpha, min_samples_leaf=min_samples_leaf)
+    clf.fit(X_train, y_train)
 
-    y_hat_with_tree = final_decision_tree.predict(X_test)
+    y_hat_tree = clf.predict(X_test)
+    accuracy = accuracy_score(y_test, y_hat_tree)
 
     dot_data = StringIO()
     export_graphviz(
-        decision_tree=final_decision_tree,
+        decision_tree=clf,
         out_file=dot_data,
         filled=True,
         rounded=True,
@@ -110,57 +119,22 @@ def build_decision_tree_2D(X_train, y_train, X_test, space, path, ccp_alpha=None
     graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
     graph.write_png(f'{path}.png')
     Image(graph.create_png())
-    img = ImagePIL.open(f'{path}.png')
-    fig_DT = plt.figure()
-    plt.imshow(img)
-    plt.title(f'DT with alpha: {ccp_alpha}')
-    plt.close(fig_DT)
 
-    xx, yy = np.meshgrid(np.linspace(space[0][0], space[0][1], 100),
-                         np.linspace(space[0][0], space[0][1], 100))
-    plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
+    if contour_plot:
+        xx, yy = np.meshgrid(np.linspace(space[0][0], space[0][1], 100),
+                             np.linspace(space[0][0], space[0][1], 100))
+        #plt.tight_layout(h_pad=0.5, w_pad=0.5, pad=2.5)
 
-    Z = final_decision_tree.predict(np.c_[xx.ravel(), yy.ravel()]).reshape(xx.shape)
-    fig_contour = plt.figure()
-    plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-    plt.scatter(*X_train.T, c=colormap(y_train), edgecolors='k')
-    plt.title(f'DT Contourplot with alpha: {ccp_alpha}')
-    plt.savefig(f'{path}_contourplot.png')
-    plt.close(fig_contour)
+        Z = clf.predict(np.c_[xx.ravel(), yy.ravel()]).reshape(xx.shape)
+        fig_contour = plt.figure()
+        plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
+        #plt.scatter(*X_test.T, c=colormap(y_test), edgecolors='k')
+        plt.title(f'Tree Parabola Contourplot Epoch {epoch}')
+        plt.tight_layout()
+        plt.savefig(f'{path}_contourplot.png')
+        plt.close(fig_contour)
 
-    return fig_DT, fig_contour, y_hat_with_tree, ccp_alpha
-
-
-def build_decision_tree(X_train, y_train, X_test, path, features=None, classes=None, ccp_alpha=None):
-    if ccp_alpha:
-        final_decision_tree = DecisionTreeClassifier(random_state=42)
-        final_decision_tree.fit(X_train, y_train)
-    else:
-        #ccp_alpha = post_pruning_2(X_train, y_train)
-        final_decision_tree = DecisionTreeClassifier(random_state=42)
-        final_decision_tree.fit(X_train, y_train)
-
-    y_hat_with_tree = final_decision_tree.predict(X_test)
-
-    dot_data = StringIO()
-    export_graphviz(
-        decision_tree=final_decision_tree,
-        out_file=dot_data,
-        filled=True,
-        rounded=True,
-        special_characters=True,
-        feature_names=features,
-        class_names=classes)
-    graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
-    graph.write_png(f'{path}.png')
-    Image(graph.create_png())
-    img = ImagePIL.open(f'{path}.png')
-    fig_DT = plt.figure()
-    plt.imshow(img)
-    plt.title(f'DT with alpha: {ccp_alpha}')
-    plt.close(fig_DT)
-
-    return fig_DT, y_hat_with_tree, ccp_alpha
+    return accuracy
 
 
 def pred_contours(x, y, model):
@@ -177,7 +151,35 @@ def pred_contours(x, y, model):
     return y_pred
 
 
-def augment_data_with_gaussian(X_train, model, device, size, ccp_alpha):
+def augment_data_with_dirichlet(X_train, parameters, model, device, num_new_samples):
+
+    parameters_new = []
+    APLs_new = []
+
+    alpha = [1] * len(parameters)
+    samples = np.random.dirichlet(alpha, num_new_samples)
+    parameters = torch.vstack(parameters).to(device)
+    samples = torch.from_numpy(samples).float().to(device)
+    parameters_ = samples @ parameters
+
+    model.to(device)
+    model.eval()
+
+    for param in parameters_:
+        model.vector_to_parameters(param)
+        APL = model.compute_APL(X_train)
+
+        parameters_new.append(param)
+        APLs_new.append(APL)
+
+    del model
+    del parameters_
+    del samples
+
+    return parameters_new, APLs_new
+
+
+def augment_data_with_gaussian(X_train, model, device, size):
 
     parameters = []
     APLs = []
@@ -195,37 +197,8 @@ def augment_data_with_gaussian(X_train, model, device, size, ccp_alpha):
             param.data = torch.tensor(param_augmented, dtype=torch.float).float().to(device)
 
         parameters.append(model_copy.get_parameter_vector)
-        APLs.append(model_copy.compute_APL(X_train, ccp_alpha))
+        APLs.append(model_copy.compute_APL(X_train))
 
         del model_copy
 
     return parameters, APLs
-
-
-def augment_data_with_dirichlet(X_train, parameters, model, device, num_new_samples, ccp_alpha):
-
-    parameters_new = []
-    APLs_new = []
-    num_parameters = len(parameters)
-
-    alpha = [1]*num_parameters
-    samples = np.random.dirichlet(alpha, num_new_samples)
-    parameters = torch.vstack(parameters)
-    samples = torch.from_numpy(samples).float().to(device)
-    parameters_ = samples @ parameters
-
-    model_copy = copy.deepcopy(model)
-    model_copy.eval()
-
-    for param in parameters_:
-        model_copy.vector_to_parameters(param)
-        APL = model_copy.compute_APL(X_train, ccp_alpha)
-
-        parameters_new.append(param)
-        APLs_new.append(APL)
-
-    del model_copy
-    del parameters_
-    del samples
-
-    return parameters_new, APLs_new
