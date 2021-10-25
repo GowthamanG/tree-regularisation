@@ -1,16 +1,8 @@
-import os
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
 from sklearn.model_selection import train_test_split
 from torch import nn
-from torch.optim import Adam, SGD
-from torch.optim.lr_scheduler import ReduceLROnPlateau, ExponentialLR
+from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 from datasets import parabola, cos, sample_2D_data
-from sklearn.metrics import plot_confusion_matrix, accuracy_score, roc_auc_score
-from sklearn.tree import DecisionTreeClassifier
-from torch.utils.data import DataLoader, TensorDataset
 import networks
 from utils import *
 import argparse
@@ -26,7 +18,7 @@ def parser():
     parser.add_argument('--label',
                         required=False,
                         type=str,
-                        default='parabola',
+                        default='no_label',
                         help='Additional label as postfix to the directory path name to indicate this run')
 
 
@@ -50,9 +42,9 @@ def parser():
 
     parser.add_argument('--min_samples_leaf',
                         required=False,
-                        default=1,
+                        default=5,
                         type=int,
-                        help='Minimum samples leaf for pre-pruning, default 1 (no pruning)')
+                        help='Minimum samples leaf for pre-pruning, default 5')
 
     parser.add_argument('--batch',
                         default=1024,
@@ -85,25 +77,64 @@ def resample_data():
 
 
 def model_contour_plot(space, model, plot_title, fig_file_name, X=None, y=None):
+    """
+    Draw contour plot for deep model.
+
+    Parameters
+    -------
+
+    space: Feature space
+
+    model: Target deep model
+
+    plot_title: Plot title
+
+    fig_file_name: Data name for saving the figure
+
+    X: Input features, default None
+
+    y: Labels, default None
+    """
+
     xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
     xx, yy = np.meshgrid(xx, yy)
     Z = pred_contours(xx, yy, model).reshape(xx.shape)
 
     fig = plt.figure()
     CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-    plt.colorbar()
+    #plt.colorbar()
     # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
     if X is not None:
         plt.scatter(*X.T, c=colormap(y), edgecolors='k')
     plt.xlim([space[0][0], space[0][1]])
     plt.ylim([space[1][0], space[1][1]])
     plt.title(plot_title)
-    fig.tight_layout()
+    #fig.tight_layout()
     plt.savefig(fig_file_name)
     plt.close(fig)
 
 
 def snap_shot_train(data_test_loader, criterion, lambda_, model, accuracy, epoch, path):
+    """
+    Making snapshot during the training process. Save deep model's contourplot, the associated decision tree and its
+    contour plot.
+
+    Parameters
+    -------
+
+    data_test_loader: Input data loader for test data
+
+    criterion: Deep model's loss function
+
+    model: Target deep model
+
+    accuracy: Current accuracy measure of the deep model
+
+    epoch: Current training epoch
+
+    path: Directory path, where the plots should be saved
+
+    """
     y_train_predicted = []
     X_train_temp = []
     y_train_temp = []
@@ -127,7 +158,9 @@ def snap_shot_train(data_test_loader, criterion, lambda_, model, accuracy, epoch
         y_train_predicted = torch.where(y_train_predicted > 0.5, 1, 0).detach().cpu().float().numpy().reshape(-1)
 
     X_test_, y_test_ = dataloader_to_numpy(data_test_loader_)
-    _ = build_decision_tree(X_train_temp, y_train_predicted, X_test_, y_test_, space, f"{path}/decision_tree-snapshot-epoch-{epoch}", epoch=epoch, min_samples_leaf=args.min_samples_leaf)
+
+    _ = build_decision_tree(X_train_temp, y_train_predicted, X_test_, y_test_, space,
+                            f"{path}/decision_tree-snapshot-epoch-{epoch}", epoch=epoch)
 
     plot_title = f'Network Contourplot, $\lambda$: {lambda_}, Accuracy: {accuracy:.2f}'
     fig_file_name = f'{path}/fig_train_prediction-snapshot-epoch-{epoch}.png'
@@ -349,7 +382,7 @@ def train(data_train_loader, data_test_loader, data_val_loader, writer, path):
     fig = plt.figure()
     plt.plot(range(0, len(surrogate_training_loss)), surrogate_training_loss)
     plt.xlabel(f'epochs ({iters_per_epoch} iterations per epoch)')
-    plt.ylim([0, 0.5])
+    plt.ylim([0, 1.0])
     plt.ylabel('loss')
     plt.grid()
     plt.title(f'Surrogate Training Loss')
@@ -364,8 +397,8 @@ def train(data_train_loader, data_test_loader, data_val_loader, writer, path):
     plt.xlabel('iterations')
     plt.ylabel('path length')
     plt.legend()
-    plt.annotate("warm up", (x_iter_warm_up - 1000, 0.5))
-    plt.annotate("regularization", (x_iter_warm_up + 100, 0.5))
+    plt.annotate("warm up", (x_iter_warm_up/2, 0.5))
+    plt.annotate("regularization", (x_iter_warm_up + 1000, 0.5))
     plt.grid()
     plt.title(f'Path length estimates')
     fig.tight_layout()
@@ -373,8 +406,8 @@ def train(data_train_loader, data_test_loader, data_val_loader, writer, path):
     plt.close(fig)
 
     fig = plt.figure()
+    plt.plot(range(0, len(tree_accuracy)), tree_accuracy, color='b', label='Accuracy Decision Trees')
     plt.plot(range(0, len(training_accuracy)), training_accuracy, color='r', label='Accuracy Network')
-    plt.plot(range(0, len(training_accuracy)), tree_accuracy, color='b', label='Accuracy Decision Trees')
     plt.xlabel(f'epochs ({iters_per_epoch} iterations per epoch)')
     plt.ylabel('accuracy')
     plt.legend()
@@ -434,7 +467,7 @@ def init(path, tb_logs_path):
                                                                            y_val, torch.float, torch.float, args.batch)
 
     # Decision tree, where data is directly fed into
-    tree_accuracy = build_decision_tree(X_train, y_train, X_test, y_test, space, f"{path}/decision_tree_original_data", min_samples_leaf=args.min_samples_leaf)
+    tree_accuracy = build_decision_tree(X_train, y_train, X_test, y_test, space, f"{path}/decision_tree_original_data")
 
     x_decision_fun = np.linspace(space[0][0], space[0][1], 100)
     y_decision_fun = fun(x_decision_fun)
@@ -532,13 +565,14 @@ if __name__ == '__main__':
 
     args = parser().parse_args()
     dim = 2
-    space = [[0, 1.5], [0, 1.5]]
-    #space = [[-6, 6], [-2, 2]]
 
     fun = parabola
     fun_name = 'parabola'
+    space = [[0, 1.5], [0, 1.5]]
+
     #fun = cos
     #fun_name = 'cos'
+    # space = [[-6, 6], [-2, 2]]
 
     dir_name = f'tree_reg_train_{args.lambda_init}_{args.lambda_target}_{args.label}'
 

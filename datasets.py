@@ -1,7 +1,4 @@
 import argparse
-import numpy as np
-import torch
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from utils import *
 
@@ -31,6 +28,9 @@ def parser():
 
 
 def plot(X, y, fun, error, space):
+    """
+    Plot feature space with decision function and samples, and the error zone.
+    """
 
     x_lower = lambda x: fun(x) - error
     x_upper = lambda x: fun(x) + error
@@ -39,24 +39,28 @@ def plot(X, y, fun, error, space):
     y_decision_fun = fun(x_decision_fun)
 
     fig = plt.figure()
-    plt.scatter(*X.T, c=colormap(y), edgecolors='k')
+    plt.scatter(*X.T, c=colormap(y), edgecolors='k', alpha=0.4)
     plt.xlim([space[0][0], space[0][1]])
     plt.ylim([space[1][0], space[1][1]])
     plt.title('Samples')
-    plt.plot(x_decision_fun, y_decision_fun, 'k-')
-    plt.plot(x_decision_fun, x_lower(x_decision_fun), color='#808080')
-    plt.plot(x_decision_fun, x_upper(x_decision_fun), color='#808080')
+    plt.plot(x_decision_fun, y_decision_fun, 'k-', linewidth=2)
+    plt.plot(x_decision_fun, x_lower(x_decision_fun), linewidth=2, color='#454545')
+    plt.plot(x_decision_fun, x_upper(x_decision_fun), linewidth=2, color='#454545')
+    plt.xlabel('$x_1$')
+    plt.ylabel('$x_2$')
     plt.show()
     plt.close(fig)
 
     fig = plt.figure()
     plt.xlim([space[0][0], space[0][1]])
     plt.ylim([space[1][0], space[1][1]])
-    plt.title('Samples')
-    plt.plot(x_decision_fun, y_decision_fun, 'k-')
-    plt.plot(x_decision_fun, x_lower(x_decision_fun), color='#808080')
-    plt.plot(x_decision_fun, x_upper(x_decision_fun), color='#808080')
+    plt.title('Noise Zone')
+    plt.plot(x_decision_fun, y_decision_fun, 'k-', linewidth=2)
+    plt.plot(x_decision_fun, x_lower(x_decision_fun), linewidth=2, color='#454545')
+    plt.plot(x_decision_fun, x_upper(x_decision_fun), linewidth=2, color='#454545')
     plt.fill_between(x_decision_fun, x_lower(x_decision_fun), x_upper(x_decision_fun))
+    plt.xlabel('$x_1$')
+    plt.ylabel('$x_2$')
     plt.show()
     plt.close(fig)
 
@@ -86,22 +90,50 @@ def save_data(X, y, filename: str):
 
 
 def parabola(x):
+    """
+    Parabola decision function
+    """
     return 5 * (x - 0.75) ** 2 + 0.4
 
 
 def cos(x):
+    """
+    Cosine decision function
+    """
     return np.cos(x)
 
 
 def sample_2D_data(num_samples, fun, error, space):
+    """
+    Sample synthetic data sets given a decision function.
+
+    Parameters
+    ---------
+
+    num_samples: Desired amount of data sampels
+
+    fun: Decision function (parabola or cosine)
+
+    error: Range of noise
+
+    space: Feature space
+
+    Returns:
+    --------
+
+    samples: Synthetic features
+
+    labels: target labels
+
+    """
     samples = np.random.uniform(low=space[0][0], high=space[0][1], size=(num_samples, 2))
     labels = np.where(samples[:, 1] > fun(samples[:, 0]), 1, 0)
 
     fun_lower = lambda x: fun(x) - error
     fun_upper = lambda x: fun(x) + error
 
-    for i, (x, y) in enumerate(samples):
-        if fun_lower(x) <= y <= fun_upper(x):
+    for i, (x_1, x_2) in enumerate(samples):
+        if fun_lower(x_1) <= x_2 <= fun_upper(x_1):
             labels[i] = np.random.binomial(n=1, p=0.5)
 
     return samples, labels

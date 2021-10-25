@@ -29,17 +29,29 @@ class SurrogateNetwork(nn.Module):
         return self.feed_forward(x)
 
     def freeze_model(self):
+        """
+        Disable model updates by gradient-descent by freezing the model parameters.
+        """
         for param in self.parameters():
             param.requires_grad = False
 
     def unfreeze_model(self):
+        """
+        Enable model updates by gradient-descent by unfreezing the model parameters.
+        """
         for param in self.parameters():
             param.requires_grad = True
 
     def parameters_to_vector(self) -> torch.Tensor:
+        """
+        Convert model parameters to vector.
+        """
         return parameters_to_vector(self.feed_forward.parameters())
 
     def vector_to_parameters(self, parameter_vector):
+        """
+        Overwrite the model parameters with given parameter vector.
+        """
         vector_to_parameters(parameter_vector, self.feed_forward.parameters())
 
 
@@ -67,6 +79,21 @@ class TreeNet(nn.Module):
         return self.feed_forward(x)
 
     def compute_APL(self, X):
+        """
+        Compute average decision path length given input data. It computes the how many decision nodes one has to
+        traverse on average for one data instance.
+
+        Parameters
+        -------
+
+        X: Input features
+
+        Returns
+        -------
+
+        average decision path lengths, taking the average from several runs with different random seeds
+
+        """
 
         def sequence_to_samples(tensor):
             sequence_array = [tensor[idx, :, :] for idx in range(tensor.shape[0])]
@@ -98,20 +125,32 @@ class TreeNet(nn.Module):
         Computes the average-path-length (APL) prediction with the surrogate model using the
         current target model parameters W as input.
 
-        :return: APL prediction as the regulariser Omega(W)
+        Returns
+        -------
+
+        APL prediction as the regulariser Omega(W)
         """
         return self.surrogate_network(self.parameters_to_vector())
 
     def freeze_model(self):
+        """
+        Disable model updates by gradient-descent by freezing the model parameters.
+        """
 
         for param in self.feed_forward.parameters():
             param.requires_grad = False
 
     def unfreeze_model(self):
+        """
+        Enable model updates by gradient-descent by unfreezing the model parameters.
+        """
         for param in self.feed_forward.parameters():
             param.requires_grad = True
 
     def freeze_bias(self):
+        """
+        Disable model updates by gradient-descent by freezing the biases.
+        """
         for name, param in self.feed_forward.named_parameters():
             if 'bias' in name:
                 param.requires_grad = False
@@ -120,7 +159,6 @@ class TreeNet(nn.Module):
         """
         Reset all weights of the feed forward network for random restarts.
         Required for initial surrogate data.
-        :return:
         """
         self.feed_forward.apply(lambda m: isinstance(m, nn.Linear) and m.reset_parameters())
 
@@ -128,13 +166,18 @@ class TreeNet(nn.Module):
         """
         Reset all weights of the feed forward network for random restarts.
         Required for initial surrogate data.
-        :return:
         """
         self.surrogate_network.apply(lambda m: isinstance(m, nn.Linear) and m.reset_parameters())
 
     def parameters_to_vector(self) -> torch.Tensor:
+        """
+        Convert model parameters to vector.
+        """
 
         return parameters_to_vector(self.feed_forward.parameters())
 
     def vector_to_parameters(self, parameter_vector):
+        """
+        Overwrite the model parameters with given parameter vector.
+        """
         vector_to_parameters(parameter_vector, self.feed_forward.parameters())
