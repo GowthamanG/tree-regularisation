@@ -1,5 +1,66 @@
 # tree-regularisation
-Tree regularisation of deep networks for interpretability
+This repository contains the code base of my Master's Thesis "Tree Regularization of Deep Networks." Based on the publication
+<a>[1]</a>, the aim is to replicate the tree regularization method for feed-forward deep networks, which can be then approximated
+by simple decision trees. The idea is, better simulate the networks decision-making via decision trees. Tree-regularized
+models belong to *model-specific* interpretable models.
+
+## Conda Environment
+We strongly recommend to work and run the code within a conda environment. Use the environment.yml file, to create the 
+environment, which includes the Python interpreter version 3.8.8, PyTorch, scikit-learn and some other dependencies.
+
+```
+conda env create -f environment.yml
+conda activate tree-regularisation
+````
+
+## Data sets
+This code base contains implementation to generate synthetic, two-dimensional data sets. The "Parabola data set" would have
+data instances in the 2D space [0, 1.5] x [0, 1.5], and uses a parabola function as decision function to separate the data
+into classes. The "Cosine data set", uses the cosine function in the space [-6, 6] x [-2, 2]. Use the following command to
+generate the data sets.
+
+```
+python datasets.py --sample <data set> --sample_size <size> --path <path>
+````
+
+For `--sample` you can either enter `parabola` or `cosine`, for `--size` any sample size you want, we recommend a 
+large number for that, and for `--path` use the directory path `dataset\parabola` or `dataset\cosine`. This repository already
+contains samples, the parabola set with 20'000 samples, and the cosine set with 35'000 samples.
+
+If you run the script it will open two plots, one scatter plot with data points, and one with the error zone, where a noise
+was added. These plots just shows you how densely the data points are distributed.
+
+## Training
+To execute the script to train a deep network given the data sets, run the following command:
+
+```
+python train.py --label <label> --lambda_init <initial lambda> --lambda_target <target lambda> --ep <total number of epochs>
+--min_samples_leaf <minimal number of sample per leaf> --batch <batch size>
+````
+
+The parameters already contain default values, run the script with parameter `-h` to see the possible description:
+
+```
+(tree-regularisation) D:\Gowthaman\Projects\Python\tree-regularisation>python train.py -h
+usage: train.py [-h] [--label LABEL] [--lambda_init LAMBDA_INIT] [--lambda_target LAMBDA_TARGET] [--ep EP] [--min_samples_leaf MIN_SAMPLES_LEAF] [--batch BATCH]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --label LABEL         Additional label as postfix to the directory path name to indicate this run
+  --lambda_init LAMBDA_INIT
+                        Initial lambda value as regularisation term
+  --lambda_target LAMBDA_TARGET
+                        Target lambda value as regularisation term
+  --ep EP               Total number of epochs, default 1000 (300 warm up + 700 regularisation)
+  --min_samples_leaf MIN_SAMPLES_LEAF
+                        Minimum samples leaf for pre-pruning, default 5
+  --batch BATCH         Batch size, default 1024
+
+````
+
+By default, the training is provided with the parabola data set. To work with the cosine data set, change the variable 
+`fun = parabola`, `fun_name = 'parabola'` and `space = [[0,1.5],[0,1.5]]` to `fun = cos`, `fun_name = 'cos` and 
+`space = [[-6,6],[-2,2]]`, in the `__main__` module (at the bottom of the script).
 
 ## References
 <a id="1">[1]</a>
