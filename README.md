@@ -1,22 +1,28 @@
 # tree-regularisation
 This repository contains the code base of my Master's Thesis "Tree Regularization of Deep Networks." Based on the publication
-<a>[1]</a>, the aim is to replicate the tree regularization method for feed-forward deep networks, which can be then approximated
-by simple decision trees. The idea is, better simulate the networks decision-making via decision trees. Tree-regularized
-models belong to *model-specific* interpretable models.
+<a>[1]</a>, the aim is to replicate the tree regularization method for feed-forward deep networks, which can be 
+then approximated by simple decision trees. The idea is, to better simulate the network's decision-making via decision trees. 
+Tree-regularized models belong to *model-specific* interpretable models.
 
 ## Conda Environment
 We strongly recommend to work and run the code within a conda environment. Use the environment.yml file, to create the 
 environment, which includes the Python interpreter version 3.8.8, PyTorch, scikit-learn and some other dependencies.
 
+First create the environment.
 ```
 conda env create -f environment.yml
+````
+
+Everytime you work with this code, activate the environment.
+
+```
 conda activate tree-regularisation
 ````
 
 ## Data sets
 This code base contains implementation to generate synthetic, two-dimensional data sets. The "Parabola data set" would have
 data instances in the 2D space [0, 1.5] x [0, 1.5], and uses a parabola function as decision function to separate the data
-into classes. The "Cosine data set", uses the cosine function in the space [-6, 6] x [-2, 2]. Use the following command to
+into classes. The "Cosine data set", uses the cosine function in the space [-6, 6] x [-2, 2]. Run the following command to
 generate the data sets.
 
 ```
@@ -27,18 +33,18 @@ For `--sample` you can either enter `parabola` or `cosine`, for `--size` any sam
 large number for that, and for `--path` use the directory path `dataset\parabola` or `dataset\cosine`. This repository already
 contains samples, the parabola set with 20'000 samples, and the cosine set with 35'000 samples.
 
-If you run the script it will open two plots, one scatter plot with data points, and one with the error zone, where a noise
-was added. These plots just shows you how densely the data points are distributed.
+If you run the script it will open two plots, a scatter plot with data points, and a plot with the error zone, where a noise
+was added. These plots shows how densely the data points are distributed.
 
 ## Training
-To execute the script to train a deep network given the data sets, run the following command:
+To execute the script for training, run the following command:
 
 ```
 python train.py --label <label> --lambda_init <initial lambda> --lambda_target <target lambda> --ep <total number of epochs>
 --min_samples_leaf <minimal number of sample per leaf> --batch <batch size>
 ````
 
-The parameters already contain default values, run the script with parameter `-h` to see the possible description:
+The parameters already contain default values, run the script with parameter `-h` to see the description:
 
 ```
 (tree-regularisation) D:\Gowthaman\Projects\Python\tree-regularisation>python train.py -h
