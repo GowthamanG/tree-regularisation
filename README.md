@@ -68,6 +68,16 @@ By default, the training is provided with the parabola data set. To work with th
 `fun = parabola`, `fun_name = 'parabola'` and `space = [[0,1.5],[0,1.5]]` to `fun = cos`, `fun_name = 'cos` and 
 `space = [[-6,6],[-2,2]]`, in the `__main__` module (at the bottom of the script).
 
+## Tensorboard
+The training outcomes like the loss, accuracy and some plots, can be visualized in the tensorboard. Run the following command
+in a separate terminal:
+
+``
+tensorboard --logdir=runs
+``
+
+To learn more about tensorboard, checkout https://pytorch.org/docs/stable/tensorboard.html.
+
 ## References
 <a id="1">[1]</a>
 M. Wu, M. Hughes, S. Parbhoo, M. Zazzi, V. Roth, and F. Doshi-Velez, “Beyond sparsity: Tree regularization of deep models 
