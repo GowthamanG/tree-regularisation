@@ -72,9 +72,9 @@ By default, the training is provided with the parabola data set. To work with th
 The training outcomes like the loss, accuracy and some plots, can be visualized in the tensorboard. Run the following command
 in a separate terminal:
 
-``
+```
 tensorboard --logdir=runs
-``
+````
 
 To learn more about tensorboard, checkout https://pytorch.org/docs/stable/tensorboard.html.
 
