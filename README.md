@@ -5,7 +5,7 @@ then approximated by simple decision trees. The idea is, to better simulate the 
 Tree-regularized models belong to *model-specific* interpretable models.
 
 ## Conda Environment
-We strongly recommend to work and run the code within a conda environment. Use the environment.yml file, to create the 
+We strongly recommend to run the code within a conda environment. Use the environment.yml file to create the 
 environment, which includes the Python interpreter version 3.8.8, PyTorch, scikit-learn and some other dependencies.
 
 First create the environment.
@@ -21,8 +21,8 @@ conda activate tree-regularisation
 
 ## Data sets
 This code base contains implementation to generate synthetic, two-dimensional data sets. The "Parabola data set" would have
-data instances in the 2D space [0, 1.5] x [0, 1.5], and uses a parabola function as decision function to separate the data
-into classes. The "Cosine data set", uses the cosine function in the space [-6, 6] x [-2, 2]. Run the following command to
+data instances in a 2D space [0, 1.5] x [0, 1.5], and uses a parabola function as decision function to separate the data
+into either class 0 or 1. The "Cosine data set", uses the cosine function in the space [-6, 6] x [-2, 2]. Run the following command to
 generate the data sets.
 
 ```
@@ -31,13 +31,13 @@ python datasets.py --sample <data set> --sample_size <size> --path <path>
 
 For `--sample` you can either enter `parabola` or `cosine`, for `--size` any sample size you want, we recommend a 
 large number for that, and for `--path` use the directory path `dataset\parabola` or `dataset\cosine`. This repository already
-contains samples, the parabola set with 20'000 samples, and the cosine set with 35'000 samples.
+has a set of data samples in the "dataset" directory, a parabola set with 20'000 samples, and a cosine set with 35'000 samples.
 
 If you run the script it will open two plots, a scatter plot with data points, and a plot with the error zone, where a noise
 was added. These plots shows how densely the data points are distributed.
 
 ## Training
-To execute the script for training, run the following command:
+To execute the script to train and regularize the network, run the following command:
 
 ```
 python train.py --label <label> --lambda_init <initial lambda> --lambda_target <target lambda> --ep <total number of epochs>
@@ -64,7 +64,7 @@ optional arguments:
 
 ````
 
-By default, the training is provided with the parabola data set. To work with the cosine data set, change the variable 
+By default, the setting uses the parabola data set. To work with the cosine data set, change the variable 
 `fun = parabola`, `fun_name = 'parabola'` and `space = [[0,1.5],[0,1.5]]` to `fun = cos`, `fun_name = 'cos` and 
 `space = [[-6,6],[-2,2]]`, in the `__main__` module (at the bottom of the script).
 
