@@ -56,12 +56,13 @@ def parser():
 
 def resample_data():
 
+    global X, y
     if fun_name == "parabola":
         X, y = sample_2D_data(5000, parabola, 0.2, space)
     elif fun_name == "cos":
         X, y = sample_2D_data(5000, cos, 0.4, space)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=42)
 
     X_train = torch.tensor(X_train, dtype=torch.float).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float).to(device)
@@ -69,9 +70,9 @@ def resample_data():
     y_test = torch.tensor(y_test.reshape(-1, 1), dtype=torch.float).to(device)
 
     data_train = TensorDataset(X_train, y_train)
-    data_train_loader = DataLoader(dataset=data_train, batch_size=64, shuffle=True)
+    data_train_loader = DataLoader(dataset=data_train, batch_size=128, shuffle=True)
     data_test = TensorDataset(X_test, y_test)
-    data_test_loader = DataLoader(dataset=data_test, batch_size=64)
+    data_test_loader = DataLoader(dataset=data_test, batch_size=128)
 
     return data_train_loader, data_test_loader
 
@@ -237,7 +238,7 @@ def train(data_train_loader, data_test_loader, data_val_loader, writer, path):
     optimizer = Adam(model.feed_forward.parameters(), lr=1e-4)
 
     criterion_sr = nn.MSELoss()
-    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer_sr = Adam(model.surrogate_network.parameters(), lr=1e-3, weight_decay=1e-3)
 
     input_surrogate = []
     APLs_surrogate = []
@@ -467,7 +468,7 @@ def init(path, tb_logs_path):
                                                                            y_val, torch.float, torch.float, args.batch)
 
     # Decision tree, where data is directly fed into
-    tree_accuracy = build_decision_tree(X_train, y_train, X_test, y_test, space, f"{path}/decision_tree_original_data")
+    acc = build_decision_tree(X_train, y_train, X_test, y_test, space, f"{path}/decision_tree_original_data")
 
     x_decision_fun = np.linspace(space[0][0], space[0][1], 100)
     y_decision_fun = fun(x_decision_fun)
@@ -553,7 +554,7 @@ def init(path, tb_logs_path):
 
     print(f'Accuracy of network with training data: {accuracy_network_train_data:.4f}')
     print(f'Accuracy of network with test data: {accuracy_network_test_data:.4f}')
-    print(f'Accuracy of tree before regularisation with test data: {tree_accuracy:.4f}')
+    print(f'Accuracy of tree before regularisation with test data: {acc:.4f}')
     print(f'Accuracy of tree after network regularisation with test data: {tree_accuracy_reg:.4f}')
 
     writer.close()
