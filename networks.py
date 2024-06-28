@@ -19,9 +19,9 @@ class SurrogateNetwork(nn.Module):
         super(SurrogateNetwork, self).__init__()
 
         self.feed_forward = nn.Sequential(
-            nn.Linear(input_dim, 25),
+            nn.Linear(input_dim, 50),
             nn.ReLU(),
-            nn.Linear(25, 1),
+            nn.Linear(50, 1),
             nn.Softplus()
         )
 
